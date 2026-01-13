@@ -4,6 +4,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
+import gleam/string
 import typechecker/ast
 import typechecker/types
 
@@ -118,7 +119,9 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
           g.GtEqInt -> Ok(">=")
           g.Eq -> Ok("=")
           g.NotEq -> Ok("!=")
-          _ -> Error(Unsupported("binary operator"))
+          g.Concatenate -> Ok("<>")
+          g.Pipe -> Ok("|>")
+          _ -> Error(Unsupported("binary operator " <> string.inspect(op)))
         }
 
         result.map(name, fn(n) {
