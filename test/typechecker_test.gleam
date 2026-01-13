@@ -7,19 +7,6 @@ import typechecker/ast
 import typechecker/env
 import typechecker/types
 
-type Lol {
-  Lol(name: Int)
-}
-
-fn ho(n: Lol) {
-  1
-}
-
-fn hi(v) {
-  ho(v)
-  v.name
-}
-
 pub fn main() -> Nil {
   gleeunit.main()
 }

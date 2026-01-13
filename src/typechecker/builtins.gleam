@@ -209,18 +209,49 @@ pub fn split_stmts(
 }
 
 pub fn add_stmts(tenv: env.TEnv, stmts: List(ast.Top)) -> env.TEnv {
-  let #(defs, aliases, others) = split_stmts(stmts)
-  let def_groups = group_mutual_defs(defs)
-  let denv =
-    list.fold(def_groups, env.empty(), fn(acc, group) {
-      let merged = env.merge(tenv, acc)
-      env.merge(acc, add_defs(merged, group))
-    })
-  let folded =
-    list.fold(list.append(aliases, others), denv, fn(acc, stmt) {
-      env.merge(acc, add_stmt(env.merge(tenv, acc), stmt))
-    })
-  folded
+  add_stmts_loop(tenv, stmts, env.empty(), [])
+}
+
+fn add_stmts_loop(
+  tenv: env.TEnv,
+  stmts: List(ast.Top),
+  acc: env.TEnv,
+  pending_defs: List(#(String, Int, ast.Expr, Int)),
+) -> env.TEnv {
+  case stmts {
+    [] -> flush_defs(tenv, acc, pending_defs)
+    [stmt, ..rest] ->
+      case stmt {
+        ast.Tdef(name, name_loc, expr, loc) ->
+          add_stmts_loop(tenv, rest, acc, [
+            #(name, name_loc, expr, loc),
+            ..pending_defs
+          ])
+        _ -> {
+          let acc = flush_defs(tenv, acc, pending_defs)
+          let merged = env.merge(tenv, acc)
+          let acc = env.merge(acc, add_stmt(merged, stmt))
+          add_stmts_loop(tenv, rest, acc, [])
+        }
+      }
+  }
+}
+
+fn flush_defs(
+  tenv: env.TEnv,
+  acc: env.TEnv,
+  pending_defs: List(#(String, Int, ast.Expr, Int)),
+) -> env.TEnv {
+  case pending_defs {
+    [] -> acc
+    _ -> {
+      let def_groups = group_mutual_defs(list.reverse(pending_defs))
+      list.fold(def_groups, acc, fn(acc, group) {
+        let merged = env.merge(tenv, acc)
+        env.merge(acc, add_defs(merged, group))
+      })
+    }
+  }
 }
 
 type DefInfo =

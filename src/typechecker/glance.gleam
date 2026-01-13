@@ -747,14 +747,25 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
     g.NamedType(span, name, module, parameters) ->
       case module {
         option.Some(_) -> Error(Unsupported("qualified type"))
-        option.None ->
+        option.None -> {
+          let resolved = case name {
+            "Int" -> "int"
+            "Float" -> "float"
+            "String" -> "string"
+            "Bool" -> "bool"
+            "List" -> "list"
+            "BitString" -> "bitstring"
+            "BitArray" -> "bitstring"
+            _ -> name
+          }
           result.map(result.all(list.map(parameters, type_)), fn(params) {
             list.fold(
               params,
-              types.Tcon(name, loc_from_span(span)),
+              types.Tcon(resolved, loc_from_span(span)),
               fn(acc, param) { types.Tapp(acc, param, loc_from_span(span)) },
             )
           })
+        }
       }
 
     g.VariableType(span, name) -> Ok(types.Tvar(name, loc_from_span(span)))
