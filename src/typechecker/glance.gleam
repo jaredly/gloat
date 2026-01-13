@@ -1,4 +1,5 @@
 import glance as g
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -34,6 +35,16 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
             loc_from_span(span),
           ))
         Error(_) -> Error(Unsupported("int literal"))
+      }
+
+    g.Float(span, value) ->
+      case float.parse(value) {
+        Ok(float_value) ->
+          Ok(ast.Eprim(
+            ast.Pfloat(float_value, loc_from_span(span)),
+            loc_from_span(span),
+          ))
+        Error(_) -> Error(Unsupported("float literal"))
       }
 
     g.String(span, value) -> Ok(ast.Estr(value, [], loc_from_span(span)))
@@ -103,6 +114,47 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
       })
       |> result.flatten
 
+    g.NegateInt(span, expr) ->
+      result.map(expression(expr), fn(expr) {
+        let loc = loc_from_span(span)
+        ast.Eapp(ast.Evar("negate", loc), [expr], loc)
+      })
+
+    g.NegateBool(span, expr) ->
+      result.map(expression(expr), fn(expr) {
+        let loc = loc_from_span(span)
+        ast.Eapp(ast.Evar("not", loc), [expr], loc)
+      })
+
+    g.TupleIndex(span, target, index) ->
+      result.map(expression(target), fn(expr) {
+        ast.EtupleIndex(expr, index, loc_from_span(span))
+      })
+
+    g.Panic(span, maybe_expr) ->
+      result.map(
+        case maybe_expr {
+          Some(expr) -> result.map(expression(expr), Some)
+          None -> Ok(None)
+        },
+        fn(maybe_expr) {
+          let loc = loc_from_span(span)
+          ast.Eapp(
+            ast.Evar("fatal", loc),
+            case maybe_expr {
+              Some(expr) -> [expr]
+              None -> []
+            },
+            loc,
+          )
+        },
+      )
+
+    g.Todo(span, _label) -> {
+      let loc = loc_from_span(span)
+      Ok(ast.Eapp(ast.Evar("fatal", loc), [ast.Estr("todo", [], loc)], loc))
+    }
+
     g.Case(span, subjects, clauses) ->
       case subjects {
         [subject] ->
@@ -116,15 +168,9 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         _ -> Error(Unsupported("case subject count"))
       }
 
-    g.NegateInt(_, _)
-    | g.NegateBool(_, _)
-    | g.Float(_, _)
-    | g.Panic(_, _)
-    | g.Todo(_, _)
-    | g.List(_, _, _)
+    g.List(_, _, _)
     | g.RecordUpdate(_, _, _, _, _)
     | g.FieldAccess(_, _, _)
-    | g.TupleIndex(_, _, _)
     | g.FnCapture(_, _, _, _, _)
     | g.BitString(_, _)
     | g.Echo(_, _, _) -> Error(Unsupported("expression"))
@@ -143,6 +189,15 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
             loc_from_span(span),
           ))
         Error(_) -> Error(Unsupported("int pattern"))
+      }
+    g.PatternFloat(span, value) ->
+      case float.parse(value) {
+        Ok(float_value) ->
+          Ok(ast.Pprim(
+            ast.Pfloat(float_value, loc_from_span(span)),
+            loc_from_span(span),
+          ))
+        Error(_) -> Error(Unsupported("float pattern"))
       }
     g.PatternString(span, value) -> Ok(ast.Pstr(value, loc_from_span(span)))
 
@@ -170,8 +225,7 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
           })
       }
 
-    g.PatternFloat(_, _)
-    | g.PatternList(_, _, _)
+    g.PatternList(_, _, _)
     | g.PatternAssignment(_, _, _)
     | g.PatternConcatenate(_, _, _, _)
     | g.PatternBitString(_, _) -> Error(Unsupported("pattern"))

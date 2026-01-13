@@ -1,4 +1,5 @@
 import gleam/dict
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/set
@@ -42,6 +43,8 @@ pub fn pattern_to_ex_pattern(
     ast.Pany(_) -> ExAny
     ast.Pstr(str, _) -> ExConstructor(str, "string", [])
     ast.Pprim(ast.Pint(v, _), _) -> ExConstructor(int.to_string(v), "int", [])
+    ast.Pprim(ast.Pfloat(v, _), _) ->
+      ExConstructor(float.to_string(v), "float", [])
     ast.Pprim(ast.Pbool(v, _), _) ->
       ExConstructor(
         case v {
@@ -179,6 +182,7 @@ fn find_gid(heads: List(ExPattern)) -> Result(String, Nil) {
 fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
   case gid {
     "int" -> []
+    "float" -> []
     "bool" -> ["true", "false"]
     "string" -> []
     "tuple" -> [","]

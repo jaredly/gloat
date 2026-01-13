@@ -5,6 +5,7 @@ pub type Loc =
 
 pub type Prim {
   Pint(value: Int, loc: Loc)
+  Pfloat(value: Float, loc: Loc)
   Pbool(value: Bool, loc: Loc)
 }
 
@@ -49,6 +50,7 @@ pub type Expr {
   Estr(String, List(#(Expr, String, Loc)), Loc)
   Equot(Quot, Loc)
   Etuple(List(Expr), Loc)
+  EtupleIndex(Expr, Int, Loc)
   Elambda(List(Pat), Expr, Loc)
   Eapp(Expr, List(Expr), Loc)
   Elet(List(#(Pat, Expr)), Expr, Loc)

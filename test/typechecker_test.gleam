@@ -26,6 +26,28 @@ pub fn infer_lambda_identity_test() {
   assert typechecker.type_to_string(inferred) == "(fn [x:0] x:0)"
 }
 
+pub fn infer_float_test() {
+  let loc = 0
+  let expr = ast.Eprim(ast.Pfloat(1.5, loc), loc)
+  let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
+  assert types.type_eq(inferred, types.Tcon("float", loc))
+}
+
+pub fn infer_tuple_index_test() {
+  let loc = 0
+  let tuple =
+    ast.Etuple(
+      [
+        ast.Eprim(ast.Pint(1, loc), loc),
+        ast.Eprim(ast.Pbool(True, loc), loc),
+      ],
+      loc,
+    )
+  let expr = ast.EtupleIndex(tuple, 1, loc)
+  let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
+  assert types.type_eq(inferred, types.Tcon("bool", loc))
+}
+
 pub fn infer_let_test() {
   let loc = 0
   let id_expr = ast.Elambda([ast.Pvar("x", loc)], ast.Evar("x", loc), loc)
@@ -134,6 +156,11 @@ pub fn tuple_test() {
 pub fn tuple3_test() {
   let code = "const top = #(1, 2, \"hi\")"
   assert process(code, "top") == "(, int int string)"
+}
+
+pub fn tuple_index_from_glance_test() {
+  let code = "const top = #(1, 2, 3).1"
+  assert process(code, "top") == "int"
 }
 
 fn process(code, name) {

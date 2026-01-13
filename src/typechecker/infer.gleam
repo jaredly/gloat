@@ -13,6 +13,7 @@ import typechecker/types
 pub fn infer_prim(prim: ast.Prim) -> types.Type {
   case prim {
     ast.Pint(_, loc) -> types.Tcon("int", loc)
+    ast.Pfloat(_, loc) -> types.Tcon("float", loc)
     ast.Pbool(_, loc) -> types.Tcon("bool", loc)
   }
 }
@@ -52,6 +53,21 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
         state.map_list(items, fn(item) { infer_expr(tenv, item) }),
       )
       state.pure(types.Ttuple(item_types, loc))
+    }
+
+    ast.EtupleIndex(target, index, loc) -> {
+      use target_type <- state.bind(infer_expr(tenv, target))
+      use applied_target <- state.bind(type_apply_state(target_type))
+      case applied_target {
+        types.Ttuple(args, _) -> tuple_index_type(args, index, loc)
+        types.Tvar(_, _) -> {
+          use args <- state.bind(tuple_index_vars(index + 1, loc))
+          let tuple_type = types.Ttuple(args, loc)
+          use _ignored <- state.bind(unify(applied_target, tuple_type, loc))
+          tuple_index_type(args, index, loc)
+        }
+        _ -> runtime.fatal("Tuple index on non-tuple " <> int.to_string(loc))
+      }
     }
 
     ast.Estr(_, templates, loc) -> {
@@ -203,6 +219,9 @@ pub fn infer_pattern(
 
     ast.Pprim(ast.Pint(_, _), loc) ->
       state.pure(#(types.Tcon("int", loc), dict.new()))
+
+    ast.Pprim(ast.Pfloat(_, _), loc) ->
+      state.pure(#(types.Tcon("float", loc), dict.new()))
 
     ast.Ptuple(items, loc) -> {
       use inferred <- state.bind(
@@ -370,4 +389,27 @@ fn scope_apply_state(
   scope: dict.Dict(String, scheme.Scheme),
 ) -> state.State(dict.Dict(String, scheme.Scheme)) {
   state.apply_with(env.scope_apply, scope)
+}
+
+fn tuple_index_type(
+  args: List(types.Type),
+  index: Int,
+  loc: Int,
+) -> state.State(types.Type) {
+  case args, index {
+    [], _ -> runtime.fatal("Tuple index out of range " <> int.to_string(loc))
+    [head, ..], 0 -> type_apply_state(head)
+    [_head, ..tail], _ -> tuple_index_type(tail, index - 1, loc)
+  }
+}
+
+fn tuple_index_vars(count: Int, loc: Int) -> state.State(List(types.Type)) {
+  case count <= 0 {
+    True -> state.pure([])
+    False -> {
+      use rest <- state.bind(tuple_index_vars(count - 1, loc))
+      use v <- state.bind(new_type_var("tuple item", loc))
+      state.pure([v, ..rest])
+    }
+  }
 }

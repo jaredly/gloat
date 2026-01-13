@@ -406,6 +406,7 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
       list.fold(items, set.new(), fn(acc, item) {
         set.union(acc, expr_free(item, bound))
       })
+    ast.EtupleIndex(target, _index, _) -> expr_free(target, bound)
     ast.Elambda(args, body, _) -> {
       let bound_args =
         list.fold(args, set.new(), fn(acc, pat) {
@@ -507,12 +508,14 @@ pub fn builtin_env() -> env.TEnv {
     dict.from_list([
       #("+", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
       #("-", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
+      #("negate", concrete(types.tfns([types.tint], types.tint, -1))),
       #(">", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
       #("<", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
       #("=", generic(["k"], types.tfns([k, k], tbool, -1))),
       #("!=", generic(["k"], types.tfns([k, k], tbool, -1))),
       #(">=", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
       #("<=", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
+      #("not", concrete(types.tfns([tbool], tbool, -1))),
       #("()", concrete(types.Tcon("()", -1))),
       #(",", generic(["a", "b"], types.tfns([a, b], t_pair(a, b), -1))),
       #(
