@@ -27,7 +27,7 @@ pub fn tfn(arg: Type, body: Type, loc: Int) -> Type {
 }
 
 pub fn tfns(args: List(Type), body: Type, loc: Int) -> Type {
-  list.fold_right(args, body, fn(arg, acc) { tfn(arg, acc, loc) })
+  list.fold_right(args, body, fn(acc, arg) { tfn(arg, acc, loc) })
 }
 
 pub const tint: Type = Tcon("int", -1)

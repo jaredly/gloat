@@ -113,18 +113,21 @@ pub fn pair(a, b) { #(a, b) }
 "
   let scheme = infer_scheme_from_glance(code, "pair")
   assert typechecker.scheme_to_string(scheme)
-    == "forall b:2 b:6 result:3 : (fn [(fn [(, (fn [b:2] result:3) b:6)] b:6) b:2] result:3)"
+    == "forall a:1 b:2 : (fn [a:1 b:2] (, a:1 b:2))"
 }
 
 pub fn infer_with_binop_test() {
-  let code =
-    "
-fn even(x) {
-    x + 3
+  let code = "fn even(x) { x + 3 }"
+  assert process(code, "even") == "(fn [int] int)"
 }
-"
-  let scheme = infer_scheme_from_glance(code, "even")
-  assert typechecker.scheme_to_string(scheme) == "(fn [int] int)"
+
+pub fn id_id_test() {
+  let code = "fn id(x) { x }\nconst top = id(id)"
+  assert process(code, "top") == "(fn [int] int)"
+}
+
+fn process(code, name) {
+  typechecker.scheme_to_string(infer_scheme_from_glance(code, name))
 }
 
 pub fn glance_binop_conversion_test() {
