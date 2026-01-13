@@ -408,6 +408,16 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         set.union(acc, expr_free(item, bound))
       })
     ast.EtupleIndex(target, _index, _) -> expr_free(target, bound)
+    ast.Elist(items, tail, _) -> {
+      let items_set =
+        list.fold(items, set.new(), fn(acc, item) {
+          set.union(acc, expr_free(item, bound))
+        })
+      case tail {
+        option.None -> items_set
+        option.Some(expr) -> set.union(items_set, expr_free(expr, bound))
+      }
+    }
     ast.Elambda(args, body, _) -> {
       let bound_args =
         list.fold(args, set.new(), fn(acc, pat) {

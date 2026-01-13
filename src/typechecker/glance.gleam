@@ -2,7 +2,7 @@ import glance as g
 import gleam/float
 import gleam/int
 import gleam/list
-import gleam/option
+import gleam/option.{None, Some}
 import gleam/result
 import typechecker/ast
 import typechecker/types
@@ -72,6 +72,15 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         }
       })
       |> result.flatten
+
+    g.List(span, elements, tail) ->
+      map2(
+        result.all(list.map(elements, expression)),
+        list_tail_expr(tail),
+        fn(items, tail_expr) {
+          ast.Elist(items, tail_expr, loc_from_span(span))
+        },
+      )
 
     g.Call(span, function, arguments) ->
       map2(
@@ -168,8 +177,7 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         _ -> Error(Unsupported("case subject count"))
       }
 
-    g.List(_, _, _)
-    | g.RecordUpdate(_, _, _, _, _)
+    g.RecordUpdate(_, _, _, _, _)
     | g.FieldAccess(_, _, _)
     | g.FnCapture(_, _, _, _, _)
     | g.BitString(_, _)
@@ -307,6 +315,15 @@ fn block_to_expression_loop(
 
     [g.Assert(_, _, _), ..] -> Error(Unsupported("assert statement"))
     [g.Use(_, _, _), ..] -> Error(Unsupported("use statement"))
+  }
+}
+
+fn list_tail_expr(
+  tail: option.Option(g.Expression),
+) -> Result(option.Option(ast.Expr), Error) {
+  case tail {
+    None -> Ok(None)
+    Some(expr) -> result.map(expression(expr), fn(expr) { Some(expr) })
   }
 }
 

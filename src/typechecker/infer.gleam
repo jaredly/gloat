@@ -71,6 +71,27 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
       }
     }
 
+    ast.Elist(items, tail, loc) -> {
+      use elem_type <- state.bind(new_type_var("list_item", loc))
+      let list_type = types.Tapp(types.Tcon("list", loc), elem_type, loc)
+      use item_types <- state.bind(
+        state.map_list(items, fn(item) { infer_expr(tenv, item) }),
+      )
+      use _ignored <- state.bind(
+        state.each_list(item_types, fn(item_type) {
+          unify(item_type, elem_type, loc)
+        }),
+      )
+      case tail {
+        None -> type_apply_state(list_type)
+        Some(tail_expr) -> {
+          use tail_type <- state.bind(infer_expr(tenv, tail_expr))
+          use _ignored <- state.bind(unify(tail_type, list_type, loc))
+          type_apply_state(list_type)
+        }
+      }
+    }
+
     ast.Estr(_, templates, loc) -> {
       use _ignored <- state.bind(
         state.each_list(templates, fn(tuple) {

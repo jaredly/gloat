@@ -52,6 +52,7 @@ pub type Expr {
   Equot(Quot, Loc)
   Etuple(List(Expr), Loc)
   EtupleIndex(Expr, Int, Loc)
+  Elist(List(Expr), option.Option(Expr), Loc)
   Elambda(List(Pat), Expr, Loc)
   Eapp(Expr, List(Expr), Loc)
   Elet(List(#(Pat, Expr)), Expr, Loc)

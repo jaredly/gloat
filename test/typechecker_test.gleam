@@ -5,7 +5,6 @@ import gleeunit
 import typechecker
 import typechecker/ast
 import typechecker/env
-import typechecker/glance as tc_glance
 import typechecker/types
 
 pub fn main() -> Nil {
@@ -116,18 +115,6 @@ const one = 1
   }
 }
 
-pub fn glance_module_unsupported_test() {
-  let code =
-    "
-const xs = [1, 2]
-"
-  let assert Ok(parsed) = glance.module(code)
-  case typechecker.from_glance_module(parsed) {
-    Ok(_) -> panic as "expected unsupported conversion error"
-    Error(tc_glance.Unsupported(_)) -> Nil
-  }
-}
-
 pub fn infer_from_glance_const_test() {
   let code =
     "
@@ -179,6 +166,11 @@ pub fn tuple3_test() {
 pub fn tuple_index_from_glance_test() {
   let code = "const top = #(1, 2, 3).1"
   assert process(code, "top") == "int"
+}
+
+pub fn list_from_glance_test() {
+  let code = "const top = [1, 2]"
+  assert process(code, "top") == "(list int)"
 }
 
 fn process(code, name) {
