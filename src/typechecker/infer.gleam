@@ -92,9 +92,9 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
         [] -> infer_expr(tenv, target)
         [arg] -> {
           use result_var <- state.bind(new_type_var("result", loc))
-          use target_type <- state.bind(infer_expr(tenv, target))
+          use target_type <- state.bind(infer_expr_inner(tenv, target))
           use arg_tenv <- state.bind(tenv_apply_state(tenv))
-          use arg_type <- state.bind(infer_expr(arg_tenv, arg))
+          use arg_type <- state.bind(infer_expr_inner(arg_tenv, arg))
           use target_type_applied <- state.bind(type_apply_state(target_type))
           use _ignored <- state.bind(unify(
             target_type_applied,

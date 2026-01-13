@@ -127,6 +127,43 @@ fn even(x) {
   assert typechecker.scheme_to_string(scheme) == "(fn [int] int)"
 }
 
+pub fn glance_binop_conversion_test() {
+  let code =
+    "
+fn even(x) {
+  x + 3
+}
+"
+  let assert Ok(parsed) = glance.module(code)
+  let tops = case typechecker.from_glance_module(parsed) {
+    Ok(tops) -> tops
+    Error(_) -> panic as "failed to convert glance module"
+  }
+  let assert [ast.Tdef("even", _, expr, _)] = tops
+  let assert ast.Elambda(_, body, _) = expr
+  case body {
+    ast.Eapp(
+      ast.Eapp(ast.Evar("+", _), [ast.Evar("x", _)], _),
+      [ast.Eprim(ast.Pint(3, _), _)],
+      _,
+    ) -> Nil
+    _ -> panic as "unexpected binop conversion shape"
+  }
+}
+
+pub fn infer_binop_ast_test() {
+  let loc = 0
+  let body =
+    ast.Eapp(
+      ast.Eapp(ast.Evar("+", loc), [ast.Evar("x", loc)], loc),
+      [ast.Eprim(ast.Pint(3, loc), loc)],
+      loc,
+    )
+  let expr = ast.Elambda([ast.Pvar("x", loc)], body, loc)
+  let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
+  assert typechecker.type_to_string(inferred) == "(fn [int] int)"
+}
+
 fn infer_scheme_from_glance(code: String, name: String) -> typechecker.Scheme {
   let assert Ok(parsed) = glance.module(code)
   let tops = case typechecker.from_glance_module(parsed) {

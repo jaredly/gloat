@@ -100,11 +100,9 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         }
 
         result.map(name, fn(n) {
-          ast.Eapp(
-            ast.Evar(n, loc_from_span(span)),
-            [left_expr, right_expr],
-            loc_from_span(span),
-          )
+          let loc = loc_from_span(span)
+          let applied_left = ast.Eapp(ast.Evar(n, loc), [left_expr], loc)
+          ast.Eapp(applied_left, [right_expr], loc)
         })
       })
       |> result.flatten
