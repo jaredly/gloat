@@ -80,9 +80,10 @@ pub fn infer_match_test() {
   let target = ast.Eprim(ast.Pint(1, loc), loc)
   let case1 = #(
     ast.Pprim(ast.Pint(1, loc), loc),
+    None,
     ast.Eprim(ast.Pbool(True, loc), loc),
   )
-  let case2 = #(ast.Pany(loc), ast.Eprim(ast.Pbool(False, loc), loc))
+  let case2 = #(ast.Pany(loc), None, ast.Eprim(ast.Pbool(False, loc), loc))
   let expr = ast.Ematch(target, [case1, case2], loc)
   let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
   assert types.type_eq(inferred, types.Tcon("bool", loc))
@@ -181,6 +182,43 @@ pub fn list_spread_from_glance_test() {
 pub fn list_spread_tail_from_glance_test() {
   let code = "const xs = [1]\nconst top = [1, 2, ..xs]"
   assert process(code, "top") == "(list int)"
+}
+
+pub fn bitstring_from_glance_test() {
+  let code = "const top = <<1, 2>>"
+  assert process(code, "top") == "bitstring"
+}
+
+pub fn fn_capture_from_glance_test() {
+  let code = "fn sum3(a, b, c) { a + b + c }\nconst top = sum3(1, _, 3)"
+  assert process(code, "top") == "(fn [int] int)"
+}
+
+pub fn case_guard_from_glance_test() {
+  let code =
+    "
+const top = case 1 {
+  x if x > 0 -> x
+  _ -> 0
+}
+"
+  assert process(code, "top") == "int"
+}
+
+pub fn concat_pattern_from_glance_test() {
+  let code =
+    "
+const top = case \"ok\" {
+  \"o\" <> rest -> rest
+  _ -> \"\"
+}
+"
+  assert process(code, "top") == "string"
+}
+
+pub fn echo_from_glance_test() {
+  let code = "const top = echo 1"
+  assert process(code, "top") == "int"
 }
 
 fn process(code, name) {

@@ -82,6 +82,11 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         },
       )
 
+    g.BitString(span, segments) ->
+      result.map(bit_string_segments_expr(segments), fn(segments) {
+        ast.Ebitstring(segments, loc_from_span(span))
+      })
+
     g.Call(span, function, arguments) ->
       map2(
         expression(function),
@@ -140,6 +145,14 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         ast.EtupleIndex(expr, index, loc_from_span(span))
       })
 
+    g.FnCapture(span, label, function, args_before, args_after) ->
+      fn_capture_to_expr(span, label, function, args_before, args_after)
+
+    g.Echo(span, expression, message) ->
+      map2(option_expr(expression), option_expr(message), fn(expr, msg) {
+        ast.Eecho(expr, msg, loc_from_span(span))
+      })
+
     g.Panic(span, maybe_expr) ->
       result.map(
         case maybe_expr {
@@ -177,11 +190,8 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         _ -> Error(Unsupported("case subject count"))
       }
 
-    g.RecordUpdate(_, _, _, _, _)
-    | g.FieldAccess(_, _, _)
-    | g.FnCapture(_, _, _, _, _)
-    | g.BitString(_, _)
-    | g.Echo(_, _, _) -> Error(Unsupported("expression"))
+    g.RecordUpdate(_, _, _, _, _) | g.FieldAccess(_, _, _) ->
+      Error(Unsupported("expression"))
   }
 }
 
@@ -230,6 +240,19 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
         ast.Pas(name, pat, loc_from_span(span))
       })
 
+    g.PatternConcatenate(span, prefix, prefix_name, rest_name) ->
+      Ok(ast.Pconcat(
+        prefix,
+        assignment_name_to_option(prefix_name),
+        assignment_name_to_option(option.Some(rest_name)),
+        loc_from_span(span),
+      ))
+
+    g.PatternBitString(span, segments) ->
+      result.map(bit_string_segments_pat(segments), fn(segments) {
+        ast.Pbitstring(segments, loc_from_span(span))
+      })
+
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
       case module, with_spread {
         option.Some(_), _ -> Error(Unsupported("qualified constructor"))
@@ -244,24 +267,26 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
             )
           })
       }
-
-    g.PatternConcatenate(_, _, _, _) | g.PatternBitString(_, _) ->
-      Error(Unsupported("pattern"))
   }
 }
 
-fn clause_to_case(clause: g.Clause) -> Result(#(ast.Pat, ast.Expr), Error) {
+fn clause_to_case(
+  clause: g.Clause,
+) -> Result(#(ast.Pat, option.Option(ast.Expr), ast.Expr), Error) {
   let g.Clause(patterns, guard, body) = clause
-  case guard {
-    option.Some(_) -> Error(Unsupported("case guard"))
-    option.None ->
-      case patterns {
-        [[single]] ->
-          map2(pattern(single), expression(body), fn(pat, body_expr) {
-            #(pat, body_expr)
-          })
-        _ -> Error(Unsupported("case patterns"))
-      }
+  case patterns {
+    [[single]] ->
+      map2(
+        pattern(single),
+        map2(option_expr(guard), expression(body), fn(guard, body_expr) {
+          #(guard, body_expr)
+        }),
+        fn(pat, pair) {
+          let #(guard, body_expr) = pair
+          #(pat, guard, body_expr)
+        },
+      )
+    _ -> Error(Unsupported("case patterns"))
   }
 }
 
@@ -324,6 +349,147 @@ fn list_tail_expr(
   case tail {
     None -> Ok(None)
     Some(expr) -> result.map(expression(expr), fn(expr) { Some(expr) })
+  }
+}
+
+fn option_expr(
+  expr: option.Option(g.Expression),
+) -> Result(option.Option(ast.Expr), Error) {
+  case expr {
+    option.None -> Ok(option.None)
+    option.Some(expr) ->
+      result.map(expression(expr), fn(expr) { option.Some(expr) })
+  }
+}
+
+fn assignment_name_to_option(
+  name: option.Option(g.AssignmentName),
+) -> option.Option(String) {
+  case name {
+    option.None -> option.None
+    option.Some(g.Named(name)) -> option.Some(name)
+    option.Some(g.Discarded(_)) -> option.None
+  }
+}
+
+fn bit_string_segments_expr(
+  segments: List(#(g.Expression, List(g.BitStringSegmentOption(g.Expression)))),
+) -> Result(
+  List(#(ast.Expr, List(ast.BitStringSegmentOption(ast.Expr)))),
+  Error,
+) {
+  result.all(
+    list.map(segments, fn(segment) {
+      let #(expr, options) = segment
+      map2(
+        expression(expr),
+        bit_string_options_expr(options),
+        fn(expr, options) { #(expr, options) },
+      )
+    }),
+  )
+}
+
+fn bit_string_segments_pat(
+  segments: List(#(g.Pattern, List(g.BitStringSegmentOption(g.Pattern)))),
+) -> Result(List(#(ast.Pat, List(ast.BitStringSegmentOption(ast.Pat)))), Error) {
+  result.all(
+    list.map(segments, fn(segment) {
+      let #(pat, options) = segment
+      map2(pattern(pat), bit_string_options_pat(options), fn(pat, options) {
+        #(pat, options)
+      })
+    }),
+  )
+}
+
+fn bit_string_options_expr(
+  options: List(g.BitStringSegmentOption(g.Expression)),
+) -> Result(List(ast.BitStringSegmentOption(ast.Expr)), Error) {
+  result.all(
+    list.map(options, fn(opt) {
+      case opt {
+        g.BytesOption -> Ok(ast.BytesOption)
+        g.IntOption -> Ok(ast.IntOption)
+        g.FloatOption -> Ok(ast.FloatOption)
+        g.BitsOption -> Ok(ast.BitsOption)
+        g.Utf8Option -> Ok(ast.Utf8Option)
+        g.Utf16Option -> Ok(ast.Utf16Option)
+        g.Utf32Option -> Ok(ast.Utf32Option)
+        g.Utf8CodepointOption -> Ok(ast.Utf8CodepointOption)
+        g.Utf16CodepointOption -> Ok(ast.Utf16CodepointOption)
+        g.Utf32CodepointOption -> Ok(ast.Utf32CodepointOption)
+        g.SignedOption -> Ok(ast.SignedOption)
+        g.UnsignedOption -> Ok(ast.UnsignedOption)
+        g.BigOption -> Ok(ast.BigOption)
+        g.LittleOption -> Ok(ast.LittleOption)
+        g.NativeOption -> Ok(ast.NativeOption)
+        g.SizeValueOption(expr) ->
+          result.map(expression(expr), fn(expr) { ast.SizeValueOption(expr) })
+        g.SizeOption(size) -> Ok(ast.SizeOption(size))
+        g.UnitOption(unit) -> Ok(ast.UnitOption(unit))
+      }
+    }),
+  )
+}
+
+fn bit_string_options_pat(
+  options: List(g.BitStringSegmentOption(g.Pattern)),
+) -> Result(List(ast.BitStringSegmentOption(ast.Pat)), Error) {
+  result.all(
+    list.map(options, fn(opt) {
+      case opt {
+        g.BytesOption -> Ok(ast.BytesOption)
+        g.IntOption -> Ok(ast.IntOption)
+        g.FloatOption -> Ok(ast.FloatOption)
+        g.BitsOption -> Ok(ast.BitsOption)
+        g.Utf8Option -> Ok(ast.Utf8Option)
+        g.Utf16Option -> Ok(ast.Utf16Option)
+        g.Utf32Option -> Ok(ast.Utf32Option)
+        g.Utf8CodepointOption -> Ok(ast.Utf8CodepointOption)
+        g.Utf16CodepointOption -> Ok(ast.Utf16CodepointOption)
+        g.Utf32CodepointOption -> Ok(ast.Utf32CodepointOption)
+        g.SignedOption -> Ok(ast.SignedOption)
+        g.UnsignedOption -> Ok(ast.UnsignedOption)
+        g.BigOption -> Ok(ast.BigOption)
+        g.LittleOption -> Ok(ast.LittleOption)
+        g.NativeOption -> Ok(ast.NativeOption)
+        g.SizeValueOption(pat) ->
+          result.map(pattern(pat), fn(pat) { ast.SizeValueOption(pat) })
+        g.SizeOption(size) -> Ok(ast.SizeOption(size))
+        g.UnitOption(unit) -> Ok(ast.UnitOption(unit))
+      }
+    }),
+  )
+}
+
+fn fn_capture_to_expr(
+  span: g.Span,
+  label: option.Option(String),
+  function: g.Expression,
+  args_before: List(g.Field(g.Expression)),
+  args_after: List(g.Field(g.Expression)),
+) -> Result(ast.Expr, Error) {
+  case label {
+    option.Some(_) -> Error(Unsupported("labelled capture"))
+    option.None ->
+      map2(
+        expression(function),
+        map2(
+          field_arguments(args_before),
+          field_arguments(args_after),
+          fn(before, after) { #(before, after) },
+        ),
+        fn(func_expr, args) {
+          let #(before, after) = args
+          let loc = loc_from_span(span)
+          let capture_name = "capture"
+          let hole = ast.Evar(capture_name, loc)
+          let applied =
+            ast.Eapp(func_expr, list.append(before, [hole, ..after]), loc)
+          ast.Elambda([ast.Pvar(capture_name, loc)], applied, loc)
+        },
+      )
   }
 }
 

@@ -56,6 +56,7 @@ pub fn pattern_to_ex_pattern(
         [],
       )
     ast.Pas(_name, pat, _loc) -> pattern_to_ex_pattern(tenv, #(pat, type_))
+    ast.Pconcat(_prefix, _prefix_name, _rest_name, _loc) -> ExAny
     ast.Plist(items, tail, loc) ->
       case type_ {
         types.Tapp(types.Tcon("list", _), elem_type, _) -> {
@@ -73,6 +74,8 @@ pub fn pattern_to_ex_pattern(
             "List pattern with non-list type " <> int.to_string(loc),
           )
       }
+    ast.Pbitstring(_segments, _loc) ->
+      ExConstructor("bitstring", "bitstring", [])
     ast.Ptuple(items, loc) ->
       case type_ {
         types.Ttuple(targs, _) ->
@@ -205,6 +208,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
     "bool" -> ["true", "false"]
     "string" -> []
     "list" -> ["[]", "::"]
+    "bitstring" -> []
     "tuple" -> [","]
     _ -> {
       let env.TEnv(_values, _tcons, types, _aliases) = tenv

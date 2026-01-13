@@ -418,6 +418,21 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         option.Some(expr) -> set.union(items_set, expr_free(expr, bound))
       }
     }
+    ast.Ebitstring(segments, _) ->
+      list.fold(segments, set.new(), fn(acc, segment) {
+        let #(expr, _opts) = segment
+        set.union(acc, expr_free(expr, bound))
+      })
+    ast.Eecho(value, message, _) -> {
+      let acc = case value {
+        option.None -> set.new()
+        option.Some(expr) -> expr_free(expr, bound)
+      }
+      case message {
+        option.None -> acc
+        option.Some(expr) -> set.union(acc, expr_free(expr, bound))
+      }
+    }
     ast.Elambda(args, body, _) -> {
       let bound_args =
         list.fold(args, set.new(), fn(acc, pat) {
@@ -446,9 +461,14 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
       let target_free = expr_free(target, bound)
       let cases_free =
         list.fold(cases, set.new(), fn(acc, item) {
-          let #(pat, body) = item
+          let #(pat, guard, body) = item
           let bound_case = set.union(bound, pat_bound(pat))
-          set.union(acc, expr_free(body, bound_case))
+          let guard_free = case guard {
+            option.None -> set.new()
+            option.Some(expr) -> expr_free(expr, bound_case)
+          }
+          let body_free = expr_free(body, bound_case)
+          set.union(acc, set.union(guard_free, body_free))
         })
       set.union(target_free, cases_free)
     }
@@ -474,6 +494,21 @@ fn pat_bound(pat: ast.Pat) -> set.Set(String) {
       }
     }
     ast.Pas(name, pat, _) -> set.insert(pat_bound(pat), name)
+    ast.Pconcat(_prefix, prefix_name, rest_name, _) -> {
+      let acc = case prefix_name {
+        option.None -> set.new()
+        option.Some(name) -> set.insert(set.new(), name)
+      }
+      case rest_name {
+        option.None -> acc
+        option.Some(name) -> set.insert(acc, name)
+      }
+    }
+    ast.Pbitstring(segments, _) ->
+      list.fold(segments, set.new(), fn(acc, segment) {
+        let #(pat, _opts) = segment
+        set.union(acc, pat_bound(pat))
+      })
     ast.Pcon(_, _, args, _) ->
       list.fold(args, set.new(), fn(acc, arg) { set.union(acc, pat_bound(arg)) })
     ast.Pstr(_, _) -> set.new()
@@ -636,6 +671,8 @@ pub fn builtin_env() -> env.TEnv {
       #("float", #(0, set.new())),
       #("string", #(0, set.new())),
       #("bool", #(0, set.new())),
+      #("bitstring", #(0, set.new())),
+      #("list", #(1, set.new())),
       #("map", #(2, set.new())),
       #("set", #(1, set.new())),
       #("->", #(2, set.new())),

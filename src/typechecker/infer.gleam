@@ -92,6 +92,40 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
       }
     }
 
+    ast.Ebitstring(segments, loc) -> {
+      use _ignored <- state.bind(
+        state.each_list(segments, fn(segment) {
+          let #(expr, _opts) = segment
+          use _ignored2 <- state.bind(infer_expr(tenv, expr))
+          use _ignored3 <- state.bind(infer_bitstring_expr_options(
+            tenv,
+            segment,
+          ))
+          state.pure(Nil)
+        }),
+      )
+      state.pure(types.Tcon("bitstring", loc))
+    }
+
+    ast.Eecho(value, message, loc) -> {
+      use _ignored <- state.bind(case message {
+        option.Some(expr) -> {
+          use msg_type <- state.bind(infer_expr(tenv, expr))
+          use _ignored2 <- state.bind(unify(
+            msg_type,
+            types.Tcon("string", loc),
+            loc,
+          ))
+          state.pure(Nil)
+        }
+        option.None -> state.pure(Nil)
+      })
+      case value {
+        option.Some(expr) -> infer_expr(tenv, expr)
+        option.None -> state.pure(types.Tcon("()", loc))
+      }
+    }
+
     ast.Estr(_, templates, loc) -> {
       use _ignored <- state.bind(
         state.each_list(templates, fn(tuple) {
@@ -183,12 +217,19 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
       use result_pair <- state.bind(
         state.foldl_list(cases, #(target_type, result_type), fn(args, args2) {
           let #(target_type_inner, result) = args
-          let #(pat, body) = args2
+          let #(pat, guard, body) = args2
           use args_inner <- state.bind(infer_pattern(tenv, pat))
           let #(type_, scope) = args_inner
           use _ignored <- state.bind(unify(type_, target_type_inner, loc))
           use scope_applied <- state.bind(scope_apply_state(scope))
           let bound_env = env.with_scope(tenv, scope_applied)
+          use _ignored_guard <- state.bind(case guard {
+            option.Some(expr) -> {
+              use guard_type <- state.bind(infer_expr(bound_env, expr))
+              unify(guard_type, types.Tcon("bool", loc), loc)
+            }
+            option.None -> state.pure(Nil)
+          })
           use body_type <- state.bind(infer_expr(bound_env, body))
           use subst <- state.bind(state.get_subst())
           use _ignored2 <- state.bind(unify(
@@ -204,15 +245,30 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
       )
       let #(_target, final_result) = result_pair
       use target_applied <- state.bind(type_apply_state(target_type))
-      use _ignored <- state.bind(exhaustive.check_exhaustiveness(
-        tenv,
-        target_applied,
-        list.map(cases, fn(args) {
-          let #(pat, _) = args
-          pat
-        }),
-        loc,
-      ))
+      case
+        list.any(cases, fn(args) {
+          let #(_pat, guard, _body) = args
+          case guard {
+            option.None -> False
+            option.Some(_) -> True
+          }
+        })
+      {
+        True -> state.pure(Nil)
+        False ->
+          state.bind(
+            exhaustive.check_exhaustiveness(
+              tenv,
+              target_applied,
+              list.map(cases, fn(args) {
+                let #(pat, _guard, _body) = args
+                pat
+              }),
+              loc,
+            ),
+            state.pure,
+          )
+      }
       state.pure(final_result)
     }
   }
@@ -280,6 +336,38 @@ pub fn infer_pattern(
       let #(type_, scope) = tuple
       let scope = dict.insert(scope, name, scheme.Forall(set.new(), type_))
       state.pure(#(type_, scope))
+    }
+
+    ast.Pconcat(_prefix, prefix_name, rest_name, loc) -> {
+      let scope =
+        dict.merge(
+          case prefix_name {
+            option.None -> dict.new()
+            option.Some(name) ->
+              dict.from_list([
+                #(name, scheme.Forall(set.new(), types.Tcon("string", loc))),
+              ])
+          },
+          case rest_name {
+            option.None -> dict.new()
+            option.Some(name) ->
+              dict.from_list([
+                #(name, scheme.Forall(set.new(), types.Tcon("string", loc))),
+              ])
+          },
+        )
+      state.pure(#(types.Tcon("string", loc), scope))
+    }
+
+    ast.Pbitstring(segments, loc) -> {
+      use scopes <- state.bind(
+        state.map_list(segments, fn(segment) {
+          infer_bitstring_pat_segment(tenv, segment)
+        }),
+      )
+      let scope =
+        list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
+      state.pure(#(types.Tcon("bitstring", loc), scope))
     }
 
     ast.Ptuple(items, loc) -> {
@@ -471,4 +559,47 @@ fn tuple_index_vars(count: Int, loc: Int) -> state.State(List(types.Type)) {
       state.pure([v, ..rest])
     }
   }
+}
+
+fn infer_bitstring_expr_options(
+  tenv: env.TEnv,
+  segment: #(ast.Expr, List(ast.BitStringSegmentOption(ast.Expr))),
+) -> state.State(Nil) {
+  let #(_expr, options) = segment
+  state.each_list(options, fn(opt) {
+    case opt {
+      ast.SizeValueOption(expr) -> {
+        use _ignored <- state.bind(infer_expr(tenv, expr))
+        state.pure(Nil)
+      }
+      _ -> state.pure(Nil)
+    }
+  })
+}
+
+fn infer_bitstring_pat_segment(
+  tenv: env.TEnv,
+  segment: #(ast.Pat, List(ast.BitStringSegmentOption(ast.Pat))),
+) -> state.State(dict.Dict(String, scheme.Scheme)) {
+  let #(pat, options) = segment
+  use tuple <- state.bind(infer_pattern(tenv, pat))
+  let #(_type, scope) = tuple
+  use option_scope <- state.bind(infer_bitstring_pat_options(tenv, options))
+  state.pure(dict.merge(scope, option_scope))
+}
+
+fn infer_bitstring_pat_options(
+  tenv: env.TEnv,
+  options: List(ast.BitStringSegmentOption(ast.Pat)),
+) -> state.State(dict.Dict(String, scheme.Scheme)) {
+  state.foldl_list(options, dict.new(), fn(acc, opt) {
+    case opt {
+      ast.SizeValueOption(pat) -> {
+        use tuple <- state.bind(infer_pattern(tenv, pat))
+        let #(_type, scope) = tuple
+        state.pure(dict.merge(acc, scope))
+      }
+      _ -> state.pure(acc)
+    }
+  })
 }

@@ -53,10 +53,12 @@ pub type Expr {
   Etuple(List(Expr), Loc)
   EtupleIndex(Expr, Int, Loc)
   Elist(List(Expr), option.Option(Expr), Loc)
+  Ebitstring(List(#(Expr, List(BitStringSegmentOption(Expr)))), Loc)
+  Eecho(option.Option(Expr), option.Option(Expr), Loc)
   Elambda(List(Pat), Expr, Loc)
   Eapp(Expr, List(Expr), Loc)
   Elet(List(#(Pat, Expr)), Expr, Loc)
-  Ematch(Expr, List(#(Pat, Expr)), Loc)
+  Ematch(Expr, List(#(Pat, option.Option(Expr), Expr)), Loc)
 }
 
 pub type Pat {
@@ -65,7 +67,30 @@ pub type Pat {
   Ptuple(List(Pat), Loc)
   Plist(List(Pat), option.Option(Pat), Loc)
   Pas(String, Pat, Loc)
+  Pconcat(String, option.Option(String), option.Option(String), Loc)
+  Pbitstring(List(#(Pat, List(BitStringSegmentOption(Pat)))), Loc)
   Pcon(String, Loc, List(Pat), Loc)
   Pstr(String, Loc)
   Pprim(Prim, Loc)
+}
+
+pub type BitStringSegmentOption(t) {
+  BytesOption
+  IntOption
+  FloatOption
+  BitsOption
+  Utf8Option
+  Utf16Option
+  Utf32Option
+  Utf8CodepointOption
+  Utf16CodepointOption
+  Utf32CodepointOption
+  SignedOption
+  UnsignedOption
+  BigOption
+  LittleOption
+  NativeOption
+  SizeValueOption(t)
+  SizeOption(Int)
+  UnitOption(Int)
 }
