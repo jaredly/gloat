@@ -48,6 +48,7 @@ pub type Expr {
   Evar(String, Loc)
   Estr(String, List(#(Expr, String, Loc)), Loc)
   Equot(Quot, Loc)
+  Etuple(List(Expr), Loc)
   Elambda(List(Pat), Expr, Loc)
   Eapp(Expr, List(Expr), Loc)
   Elet(List(#(Pat, Expr)), Expr, Loc)
@@ -57,6 +58,7 @@ pub type Expr {
 pub type Pat {
   Pany(Loc)
   Pvar(String, Loc)
+  Ptuple(List(Pat), Loc)
   Pcon(String, Loc, List(Pat), Loc)
   Pstr(String, Loc)
   Pprim(Prim, Loc)

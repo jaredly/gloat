@@ -54,17 +54,13 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
       }
 
     g.Tuple(span, elements) ->
-      case elements {
-        [left, right] ->
-          map2(expression(left), expression(right), fn(left_expr, right_expr) {
-            ast.Eapp(
-              ast.Evar(",", loc_from_span(span)),
-              [left_expr, right_expr],
-              loc_from_span(span),
-            )
-          })
-        _ -> Error(Unsupported("tuple arity"))
-      }
+      result.map(result.all(list.map(elements, expression)), fn(exprs) {
+        case exprs {
+          [_, ..] -> Ok(ast.Etuple(exprs, loc_from_span(span)))
+          _ -> Error(Unsupported("tuple arity"))
+        }
+      })
+      |> result.flatten
 
     g.Call(span, function, arguments) ->
       map2(
@@ -151,18 +147,13 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
     g.PatternString(span, value) -> Ok(ast.Pstr(value, loc_from_span(span)))
 
     g.PatternTuple(span, elements) ->
-      case elements {
-        [left, right] ->
-          map2(pattern(left), pattern(right), fn(left_pat, right_pat) {
-            ast.Pcon(
-              ",",
-              loc_from_span(span),
-              [left_pat, right_pat],
-              loc_from_span(span),
-            )
-          })
-        _ -> Error(Unsupported("tuple pattern arity"))
-      }
+      result.map(result.all(list.map(elements, pattern)), fn(pats) {
+        case pats {
+          [_, ..] -> Ok(ast.Ptuple(pats, loc_from_span(span)))
+          _ -> Error(Unsupported("tuple pattern arity"))
+        }
+      })
+      |> result.flatten
 
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
       case module, with_spread {
@@ -419,21 +410,13 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
       )
 
     g.TupleType(span, elements) ->
-      case elements {
-        [left, right] ->
-          map2(type_(left), type_(right), fn(left_t, right_t) {
-            types.Tapp(
-              types.Tapp(
-                types.Tcon(",", loc_from_span(span)),
-                left_t,
-                loc_from_span(span),
-              ),
-              right_t,
-              loc_from_span(span),
-            )
-          })
-        _ -> Error(Unsupported("tuple type arity"))
-      }
+      result.map(result.all(list.map(elements, type_)), fn(types_) {
+        case types_ {
+          [_, ..] -> Ok(types.Ttuple(types_, loc_from_span(span)))
+          _ -> Error(Unsupported("tuple type arity"))
+        }
+      })
+      |> result.flatten
 
     g.HoleType(_, _) -> Error(Unsupported("type hole"))
   }

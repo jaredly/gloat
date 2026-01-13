@@ -8,6 +8,7 @@ pub type Type {
   Tvar(String, Int)
   Tapp(Type, Type, Int)
   Tcon(String, Int)
+  Ttuple(List(Type), Int)
 }
 
 pub type Subst =
@@ -18,6 +19,12 @@ pub fn type_eq(one: Type, two: Type) -> Bool {
     Tvar(id, _), Tvar(id2, _) -> id == id2
     Tapp(t1, a1, _), Tapp(t2, a2, _) -> type_eq(t1, t2) && type_eq(a1, a2)
     Tcon(name, _), Tcon(name2, _) -> name == name2
+    Ttuple(args, _), Ttuple(args2, _) ->
+      list.length(args) == list.length(args2)
+      && list.all(list.zip(args, args2), fn(pair) {
+        let #(left, right) = pair
+        type_eq(left, right)
+      })
     _, _ -> False
   }
 }
@@ -41,6 +48,10 @@ pub fn type_to_string_simple(type_: Type) -> String {
       <> "] "
       <> type_to_string_simple(res)
       <> ")"
+    Ttuple(args, _) ->
+      "(, "
+      <> string.join(list.map(args, type_to_string_simple), with: " ")
+      <> ")"
     Tapp(target, arg, _) ->
       "("
       <> type_to_string_simple(target)
@@ -63,6 +74,8 @@ pub fn type_to_string(type_: Type) -> String {
       <> type_to_string(result)
       <> ")"
     }
+    Ttuple(args, _) ->
+      "(, " <> string.join(list.map(args, type_to_string), with: " ") <> ")"
     Tapp(_, _, _) -> {
       let #(target, args) = unwrap_app(type_, [])
       let args_s = list.map(args, type_to_string)
@@ -98,6 +111,8 @@ pub fn type_free(type_: Type) -> set.Set(String) {
     Tvar(id, _) -> set.insert(set.new(), id)
     Tcon(_, _) -> set.new()
     Tapp(a, b, _) -> set.union(type_free(a), type_free(b))
+    Ttuple(args, _) ->
+      list.fold(args, set.new(), fn(acc, arg) { set.union(acc, type_free(arg)) })
   }
 }
 
@@ -110,6 +125,8 @@ pub fn type_apply(subst: Subst, type_: Type) -> Type {
       }
     Tapp(target, arg, loc) ->
       Tapp(type_apply(subst, target), type_apply(subst, arg), loc)
+    Ttuple(args, loc) ->
+      Ttuple(list.map(args, fn(arg) { type_apply(subst, arg) }), loc)
     _ -> type_
   }
 }
@@ -130,6 +147,8 @@ pub fn type_con_to_var(vars: set.Set(String), type_: Type) -> Type {
       }
     Tapp(a, b, loc) ->
       Tapp(type_con_to_var(vars, a), type_con_to_var(vars, b), loc)
+    Ttuple(args, loc) ->
+      Ttuple(list.map(args, fn(arg) { type_con_to_var(vars, arg) }), loc)
   }
 }
 
@@ -139,6 +158,7 @@ pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Int))) {
       let #(target_inner, inner) = type_unroll_app(target)
       #(target_inner, [#(arg, loc), ..inner])
     }
+    Ttuple(_, _) -> #(type_, [])
     _ -> #(type_, [])
   }
 }
@@ -160,6 +180,7 @@ pub fn tcon_and_args(
       )
     Tcon(name, _) -> #(name, coll)
     Tapp(target, arg, _) -> tcon_and_args(target, [arg, ..coll], loc)
+    Ttuple(args, _) -> #("tuple", args)
   }
 }
 
@@ -167,25 +188,36 @@ pub fn type_resolve_aliases(
   aliases: dict.Dict(String, #(List(String), Type)),
   type_: Type,
 ) -> Type {
-  let #(target, args) = type_unroll_app(type_)
-  let resolved_args =
-    list.map(list.reverse(args), fn(args) {
-      let #(arg, _loc) = args
-      type_resolve_aliases(aliases, arg)
-    })
+  case type_ {
+    Ttuple(args, loc) ->
+      Ttuple(
+        list.map(args, fn(arg) { type_resolve_aliases(aliases, arg) }),
+        loc,
+      )
+    _ -> {
+      let #(target, args) = type_unroll_app(type_)
+      let resolved_args =
+        list.map(list.reverse(args), fn(args) {
+          let #(arg, _loc) = args
+          type_resolve_aliases(aliases, arg)
+        })
 
-  case target {
-    Tcon(name, loc) ->
-      case dict.get(aliases, name) {
-        Ok(#(free, alias_type)) -> {
-          let subst = dict.from_list(list.zip(free, resolved_args))
-          type_resolve_aliases(aliases, type_apply(subst, alias_type))
-        }
-        Error(_) ->
+      case target {
+        Tcon(name, loc) ->
+          case dict.get(aliases, name) {
+            Ok(#(free, alias_type)) -> {
+              let subst = dict.from_list(list.zip(free, resolved_args))
+              type_resolve_aliases(aliases, type_apply(subst, alias_type))
+            }
+            Error(_) ->
+              list.fold(resolved_args, target, fn(acc, arg) {
+                Tapp(acc, arg, loc)
+              })
+          }
+        Tvar(_, loc) ->
           list.fold(resolved_args, target, fn(acc, arg) { Tapp(acc, arg, loc) })
+        _ -> target
       }
-    Tvar(_, loc) ->
-      list.fold(resolved_args, target, fn(acc, arg) { Tapp(acc, arg, loc) })
-    _ -> target
+    }
   }
 }

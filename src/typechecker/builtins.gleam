@@ -402,6 +402,10 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         set.union(acc, expr_free(expr, bound))
       })
     ast.Equot(_, _) -> set.new()
+    ast.Etuple(items, _) ->
+      list.fold(items, set.new(), fn(acc, item) {
+        set.union(acc, expr_free(item, bound))
+      })
     ast.Elambda(args, body, _) -> {
       let bound_args =
         list.fold(args, set.new(), fn(acc, pat) {
@@ -443,6 +447,10 @@ fn pat_bound(pat: ast.Pat) -> set.Set(String) {
   case pat {
     ast.Pany(_) -> set.new()
     ast.Pvar(name, _) -> set.insert(set.new(), name)
+    ast.Ptuple(items, _) ->
+      list.fold(items, set.new(), fn(acc, item) {
+        set.union(acc, pat_bound(item))
+      })
     ast.Pcon(_, _, args, _) ->
       list.fold(args, set.new(), fn(acc, arg) { set.union(acc, pat_bound(arg)) })
     ast.Pstr(_, _) -> set.new()
@@ -481,7 +489,7 @@ pub fn vbl(k: String) -> types.Type {
 }
 
 pub fn t_pair(a: types.Type, b: types.Type) -> types.Type {
-  types.Tapp(types.Tapp(types.Tcon(",", -1), a, -1), b, -1)
+  types.Ttuple([a, b], -1)
 }
 
 pub const tstring: types.Type = types.Tcon("string", -1)

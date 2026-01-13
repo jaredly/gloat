@@ -51,6 +51,24 @@ pub fn pattern_to_ex_pattern(
         "bool",
         [],
       )
+    ast.Ptuple(items, loc) ->
+      case type_ {
+        types.Ttuple(targs, _) ->
+          case list.length(items) == list.length(targs) {
+            True ->
+              ExConstructor(
+                ",",
+                "tuple",
+                list.map(list.zip(items, targs), fn(pair) {
+                  let #(pat, t) = pair
+                  pattern_to_ex_pattern(tenv, #(pat, t))
+                }),
+              )
+            False ->
+              runtime.fatal("Tuple arity mismatch " <> int.to_string(loc))
+          }
+        _ -> runtime.fatal("Tuple pattern with non-tuple type")
+      }
     ast.Pcon(name, _name_loc, args, loc) -> {
       let #(tname, targs) = types.tcon_and_args(type_, [], loc)
       let env.TEnv(_values, tcons, _types, _aliases) = tenv
@@ -163,6 +181,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
     "int" -> []
     "bool" -> ["true", "false"]
     "string" -> []
+    "tuple" -> [","]
     _ -> {
       let env.TEnv(_values, _tcons, types, _aliases) = tenv
       case dict.get(types, gid) {

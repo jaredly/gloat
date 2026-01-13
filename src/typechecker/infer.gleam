@@ -47,6 +47,13 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
 
     ast.Equot(quot, loc) -> state.pure(infer_quot(quot, loc))
 
+    ast.Etuple(items, loc) -> {
+      use item_types <- state.bind(
+        state.map_list(items, fn(item) { infer_expr(tenv, item) }),
+      )
+      state.pure(types.Ttuple(item_types, loc))
+    }
+
     ast.Estr(_, templates, loc) -> {
       use _ignored <- state.bind(
         state.each_list(templates, fn(tuple) {
@@ -197,6 +204,16 @@ pub fn infer_pattern(
     ast.Pprim(ast.Pint(_, _), loc) ->
       state.pure(#(types.Tcon("int", loc), dict.new()))
 
+    ast.Ptuple(items, loc) -> {
+      use inferred <- state.bind(
+        state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
+      )
+      let #(types_, scopes) = list.unzip(inferred)
+      let scope =
+        list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
+      state.pure(#(types.Ttuple(types_, loc), scope))
+    }
+
     ast.Pcon(name, _name_loc, args, loc) -> {
       use args2 <- state.bind(instantiate_tcon(tenv, name, loc))
       let #(cargs, cres) = args2
@@ -286,6 +303,23 @@ pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
       let right = types.type_apply(subst, a2)
       unify(left, right, loc)
     }
+    types.Ttuple(args1, _), types.Ttuple(args2, _) ->
+      case list.length(args1) == list.length(args2) {
+        True ->
+          state.each_list(list.zip(args1, args2), fn(args) {
+            let #(left, right) = args
+            unify(left, right, loc)
+          })
+        False ->
+          runtime.fatal(
+            "Incompatible tuple arity "
+            <> int.to_string(loc)
+            <> " "
+            <> runtime.jsonify(t1)
+            <> " (vs) "
+            <> runtime.jsonify(t2),
+          )
+      }
     _, _ ->
       runtime.fatal(
         "Incompatible types: "
