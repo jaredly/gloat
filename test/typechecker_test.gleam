@@ -149,6 +149,16 @@ pub fn infer_with_binop_test() {
   assert process(code, "even") == "(fn [int] int)"
 }
 
+pub fn mutual_recursion_test() {
+  let code = "fn even(x) { x + odd(x) }\nfn odd(v) { v - 1 }"
+  assert process(code, "even") == "(fn [int] int)"
+}
+
+pub fn mutual_recursion_oorder_test() {
+  let code = "fn even(x) { x + odd(x) }\nconst x = \"hi\"\nfn odd(v) { v - 1 }"
+  assert process(code, "even") == "(fn [int] int)"
+}
+
 pub fn id_id_test() {
   let code = "fn id(x) { x }\nconst top = id(id)"
   assert process(code, "top") == "forall x:1:3 : (fn [x:1:3] x:1:3)"
