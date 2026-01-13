@@ -173,6 +173,16 @@ pub fn list_from_glance_test() {
   assert process(code, "top") == "(list int)"
 }
 
+pub fn list_spread_from_glance_test() {
+  let code = "const xs = [1]\nconst top = [..xs]"
+  assert process(code, "top") == "(list int)"
+}
+
+pub fn list_spread_tail_from_glance_test() {
+  let code = "const xs = [1]\nconst top = [1, 2, ..xs]"
+  assert process(code, "top") == "(list int)"
+}
+
 fn process(code, name) {
   typechecker.scheme_to_string(infer_scheme_from_glance(code, name))
 }
