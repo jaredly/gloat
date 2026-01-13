@@ -1,5 +1,6 @@
 import gleam/dict
 import gleam/list
+import gleam/option
 import gleam/set
 import typechecker/ast
 import typechecker/env
@@ -452,6 +453,17 @@ fn pat_bound(pat: ast.Pat) -> set.Set(String) {
       list.fold(items, set.new(), fn(acc, item) {
         set.union(acc, pat_bound(item))
       })
+    ast.Plist(items, tail, _) -> {
+      let items_set =
+        list.fold(items, set.new(), fn(acc, item) {
+          set.union(acc, pat_bound(item))
+        })
+      case tail {
+        option.None -> items_set
+        option.Some(pat) -> set.union(items_set, pat_bound(pat))
+      }
+    }
+    ast.Pas(name, pat, _) -> set.insert(pat_bound(pat), name)
     ast.Pcon(_, _, args, _) ->
       list.fold(args, set.new(), fn(acc, arg) { set.union(acc, pat_bound(arg)) })
     ast.Pstr(_, _) -> set.new()

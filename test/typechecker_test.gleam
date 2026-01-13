@@ -1,5 +1,6 @@
 import glance
 import gleam/list
+import gleam/option.{None}
 import gleeunit
 import typechecker
 import typechecker/ast
@@ -31,6 +32,23 @@ pub fn infer_float_test() {
   let expr = ast.Eprim(ast.Pfloat(1.5, loc), loc)
   let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
   assert types.type_eq(inferred, types.Tcon("float", loc))
+}
+
+pub fn infer_list_pattern_test() {
+  let loc = 0
+  let pat = ast.Plist([ast.Pvar("x", loc), ast.Pvar("y", loc)], None, loc)
+  let expr = ast.Elambda([pat], ast.Evar("x", loc), loc)
+  let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
+  assert typechecker.type_to_string(inferred)
+    == "(fn [(list list_item:0)] list_item:0)"
+}
+
+pub fn infer_alias_pattern_test() {
+  let loc = 0
+  let pat = ast.Pas("y", ast.Pvar("x", loc), loc)
+  let expr = ast.Elambda([pat], ast.Evar("y", loc), loc)
+  let inferred = typechecker.infer_expr(typechecker.builtin_env(), expr)
+  assert typechecker.type_to_string(inferred) == "(fn [x:0] x:0)"
 }
 
 pub fn infer_tuple_index_test() {

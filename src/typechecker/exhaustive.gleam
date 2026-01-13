@@ -2,6 +2,7 @@ import gleam/dict
 import gleam/float
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/set
 import typechecker/ast
 import typechecker/env
@@ -54,6 +55,24 @@ pub fn pattern_to_ex_pattern(
         "bool",
         [],
       )
+    ast.Pas(_name, pat, _loc) -> pattern_to_ex_pattern(tenv, #(pat, type_))
+    ast.Plist(items, tail, loc) ->
+      case type_ {
+        types.Tapp(types.Tcon("list", _), elem_type, _) -> {
+          let base = case tail {
+            option.None -> ExConstructor("[]", "list", [])
+            option.Some(pat) -> pattern_to_ex_pattern(tenv, #(pat, type_))
+          }
+          list.fold_right(items, base, fn(acc, item) {
+            let head = pattern_to_ex_pattern(tenv, #(item, elem_type))
+            ExConstructor("::", "list", [head, acc])
+          })
+        }
+        _ ->
+          runtime.fatal(
+            "List pattern with non-list type " <> int.to_string(loc),
+          )
+      }
     ast.Ptuple(items, loc) ->
       case type_ {
         types.Ttuple(targs, _) ->
@@ -185,6 +204,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
     "float" -> []
     "bool" -> ["true", "false"]
     "string" -> []
+    "list" -> ["[]", "::"]
     "tuple" -> [","]
     _ -> {
       let env.TEnv(_values, _tcons, types, _aliases) = tenv

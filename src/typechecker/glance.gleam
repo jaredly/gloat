@@ -2,7 +2,7 @@ import glance as g
 import gleam/float
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option
 import gleam/result
 import typechecker/ast
 import typechecker/types
@@ -134,16 +134,16 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
     g.Panic(span, maybe_expr) ->
       result.map(
         case maybe_expr {
-          Some(expr) -> result.map(expression(expr), Some)
-          None -> Ok(None)
+          option.Some(expr) -> result.map(expression(expr), option.Some)
+          option.None -> Ok(option.None)
         },
         fn(maybe_expr) {
           let loc = loc_from_span(span)
           ast.Eapp(
             ast.Evar("fatal", loc),
             case maybe_expr {
-              Some(expr) -> [expr]
-              None -> []
+              option.Some(expr) -> [expr]
+              option.None -> []
             },
             loc,
           )
@@ -210,9 +210,21 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
       })
       |> result.flatten
 
+    g.PatternList(span, elements, tail) ->
+      map2(
+        result.all(list.map(elements, pattern)),
+        pattern_list_tail(tail),
+        fn(pats, tail_pat) { ast.Plist(pats, tail_pat, loc_from_span(span)) },
+      )
+
+    g.PatternAssignment(span, pat, name) ->
+      result.map(pattern(pat), fn(pat) {
+        ast.Pas(name, pat, loc_from_span(span))
+      })
+
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
       case module, with_spread {
-        Some(_), _ -> Error(Unsupported("qualified constructor"))
+        option.Some(_), _ -> Error(Unsupported("qualified constructor"))
         _, True -> Error(Unsupported("spread pattern"))
         _, False ->
           result.map(field_patterns(arguments), fn(args) {
@@ -225,18 +237,16 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
           })
       }
 
-    g.PatternList(_, _, _)
-    | g.PatternAssignment(_, _, _)
-    | g.PatternConcatenate(_, _, _, _)
-    | g.PatternBitString(_, _) -> Error(Unsupported("pattern"))
+    g.PatternConcatenate(_, _, _, _) | g.PatternBitString(_, _) ->
+      Error(Unsupported("pattern"))
   }
 }
 
 fn clause_to_case(clause: g.Clause) -> Result(#(ast.Pat, ast.Expr), Error) {
   let g.Clause(patterns, guard, body) = clause
   case guard {
-    Some(_) -> Error(Unsupported("case guard"))
-    None ->
+    option.Some(_) -> Error(Unsupported("case guard"))
+    option.None ->
       case patterns {
         [[single]] ->
           map2(pattern(single), expression(body), fn(pat, body_expr) {
@@ -244,6 +254,15 @@ fn clause_to_case(clause: g.Clause) -> Result(#(ast.Pat, ast.Expr), Error) {
           })
         _ -> Error(Unsupported("case patterns"))
       }
+  }
+}
+
+fn pattern_list_tail(
+  tail: option.Option(g.Pattern),
+) -> Result(option.Option(ast.Pat), Error) {
+  case tail {
+    option.None -> Ok(option.None)
+    option.Some(pat) -> result.map(pattern(pat), fn(pat) { option.Some(pat) })
   }
 }
 
@@ -347,7 +366,7 @@ fn definition_to_function(
   case
     list.filter(parameters, fn(p) {
       let g.FunctionParameter(label, _name, _type_) = p
-      label != None
+      label != option.None
     })
   {
     [] ->
@@ -441,8 +460,8 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
   case type_expr {
     g.NamedType(span, name, module, parameters) ->
       case module {
-        Some(_) -> Error(Unsupported("qualified type"))
-        None ->
+        option.Some(_) -> Error(Unsupported("qualified type"))
+        option.None ->
           result.map(result.all(list.map(parameters, type_)), fn(params) {
             list.fold(
               params,

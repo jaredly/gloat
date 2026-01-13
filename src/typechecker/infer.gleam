@@ -1,6 +1,7 @@
 import gleam/dict
 import gleam/int
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/set
 import typechecker/ast
 import typechecker/env
@@ -223,6 +224,43 @@ pub fn infer_pattern(
     ast.Pprim(ast.Pfloat(_, _), loc) ->
       state.pure(#(types.Tcon("float", loc), dict.new()))
 
+    ast.Plist(items, tail, loc) -> {
+      use elem_type <- state.bind(new_type_var("list_item", loc))
+      let list_type = types.Tapp(types.Tcon("list", loc), elem_type, loc)
+      use inferred <- state.bind(
+        state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
+      )
+      let #(item_types, scopes) = list.unzip(inferred)
+      use _ignored <- state.bind(
+        state.each_list(item_types, fn(item_type) {
+          unify(item_type, elem_type, loc)
+        }),
+      )
+      let scope =
+        list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
+      case tail {
+        None -> {
+          use list_type_applied <- state.bind(type_apply_state(list_type))
+          state.pure(#(list_type_applied, scope))
+        }
+        Some(tail_pat) -> {
+          use tail_tuple <- state.bind(infer_pattern(tenv, tail_pat))
+          let #(tail_type, tail_scope) = tail_tuple
+          use _ignored <- state.bind(unify(tail_type, list_type, loc))
+          let scope = dict.merge(scope, tail_scope)
+          use list_type_applied <- state.bind(type_apply_state(list_type))
+          state.pure(#(list_type_applied, scope))
+        }
+      }
+    }
+
+    ast.Pas(name, pat, _loc) -> {
+      use tuple <- state.bind(infer_pattern(tenv, pat))
+      let #(type_, scope) = tuple
+      let scope = dict.insert(scope, name, scheme.Forall(set.new(), type_))
+      state.pure(#(type_, scope))
+    }
+
     ast.Ptuple(items, loc) -> {
       use inferred <- state.bind(
         state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
@@ -408,7 +446,7 @@ fn tuple_index_vars(count: Int, loc: Int) -> state.State(List(types.Type)) {
     True -> state.pure([])
     False -> {
       use rest <- state.bind(tuple_index_vars(count - 1, loc))
-      use v <- state.bind(new_type_var("tuple item", loc))
+      use v <- state.bind(new_type_var("tuple_item", loc))
       state.pure([v, ..rest])
     }
   }

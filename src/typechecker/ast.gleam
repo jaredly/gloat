@@ -1,3 +1,4 @@
+import gleam/option
 import typechecker/types
 
 pub type Loc =
@@ -61,6 +62,8 @@ pub type Pat {
   Pany(Loc)
   Pvar(String, Loc)
   Ptuple(List(Pat), Loc)
+  Plist(List(Pat), option.Option(Pat), Loc)
+  Pas(String, Pat, Loc)
   Pcon(String, Loc, List(Pat), Loc)
   Pstr(String, Loc)
   Pprim(Prim, Loc)
