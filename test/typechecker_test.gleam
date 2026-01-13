@@ -123,7 +123,7 @@ pub fn infer_with_binop_test() {
 
 pub fn id_id_test() {
   let code = "fn id(x) { x }\nconst top = id(id)"
-  assert process(code, "top") == "(fn [int] int)"
+  assert process(code, "top") == "forall x:1:3 : (fn [x:1:3] x:1:3)"
 }
 
 fn process(code, name) {

@@ -197,12 +197,257 @@ pub fn split_stmts(
 
 pub fn add_stmts(tenv: env.TEnv, stmts: List(ast.Top)) -> env.TEnv {
   let #(defs, aliases, others) = split_stmts(stmts)
-  let denv = add_defs(tenv, defs)
+  let def_groups = group_mutual_defs(defs)
+  let denv =
+    list.fold(def_groups, env.empty(), fn(acc, group) {
+      let merged = env.merge(tenv, acc)
+      env.merge(acc, add_defs(merged, group))
+    })
   let folded =
     list.fold(list.append(aliases, others), denv, fn(acc, stmt) {
       env.merge(acc, add_stmt(env.merge(tenv, acc), stmt))
     })
   folded
+}
+
+type DefInfo =
+  #(String, Int, ast.Expr, Int, Int)
+
+fn group_mutual_defs(
+  defs: List(#(String, Int, ast.Expr, Int)),
+) -> List(List(#(String, Int, ast.Expr, Int))) {
+  let defs_in_order = list.reverse(defs)
+  let infos = def_infos(defs_in_order)
+  let groups = def_info_groups(infos)
+  list.map(groups, fn(group) {
+    list.map(group, fn(info) {
+      let #(name, name_loc, expr, loc, _idx) = info
+      #(name, name_loc, expr, loc)
+    })
+  })
+}
+
+fn def_infos(defs: List(#(String, Int, ast.Expr, Int))) -> List(DefInfo) {
+  let #(_idx, infos_rev) =
+    list.fold(defs, #(0, []), fn(acc, def) {
+      let #(idx, infos) = acc
+      let #(name, name_loc, expr, loc) = def
+      #(idx + 1, [#(name, name_loc, expr, loc, idx), ..infos])
+    })
+  list.reverse(infos_rev)
+}
+
+fn def_info_groups(defs: List(DefInfo)) -> List(List(DefInfo)) {
+  case defs {
+    [] -> []
+    _ -> {
+      let names = list.map(defs, def_name)
+      let names_set = set.from_list(names)
+      let deps =
+        dict.from_list(
+          list.map(defs, fn(def) {
+            let free = expr_free(def_expr(def), set.new())
+            let dep_names =
+              list.filter(set.to_list(free), fn(name) {
+                set.contains(names_set, name)
+              })
+            #(def_name(def), set.from_list(dep_names))
+          }),
+        )
+      let order = dfs_finish_order(names, deps, names)
+      let reverse_deps = reverse_graph(names, deps)
+      let sccs = dfs_sccs(order, reverse_deps, names)
+      let sccs_topo = list.reverse(sccs)
+      list.map(sccs_topo, fn(group_names) {
+        let group_set = set.from_list(group_names)
+        list.filter(defs, fn(def) { set.contains(group_set, def_name(def)) })
+      })
+    }
+  }
+}
+
+fn def_name(def: DefInfo) -> String {
+  let #(name, _, _, _, _) = def
+  name
+}
+
+fn def_expr(def: DefInfo) -> ast.Expr {
+  let #(_, _, expr, _, _) = def
+  expr
+}
+
+fn dfs_finish_order(
+  names: List(String),
+  graph: dict.Dict(String, set.Set(String)),
+  name_order: List(String),
+) -> List(String) {
+  let #(_visited, order) =
+    list.fold(names, #(set.new(), []), fn(acc, name) {
+      let #(visited, order) = acc
+      dfs_order(name, graph, name_order, visited, order)
+    })
+  order
+}
+
+fn dfs_order(
+  name: String,
+  graph: dict.Dict(String, set.Set(String)),
+  name_order: List(String),
+  visited: set.Set(String),
+  order: List(String),
+) -> #(set.Set(String), List(String)) {
+  case set.contains(visited, name) {
+    True -> #(visited, order)
+    False -> {
+      let visited = set.insert(visited, name)
+      let neighbors = neighbors_in_order(name, graph, name_order)
+      let #(visited2, order2) =
+        list.fold(neighbors, #(visited, order), fn(acc, next) {
+          let #(v, o) = acc
+          dfs_order(next, graph, name_order, v, o)
+        })
+      #(visited2, [name, ..order2])
+    }
+  }
+}
+
+fn dfs_sccs(
+  order: List(String),
+  graph: dict.Dict(String, set.Set(String)),
+  name_order: List(String),
+) -> List(List(String)) {
+  let #(_visited, comps_rev) =
+    list.fold(order, #(set.new(), []), fn(acc, name) {
+      let #(visited, comps) = acc
+      case set.contains(visited, name) {
+        True -> #(visited, comps)
+        False -> {
+          let #(visited2, comp) =
+            dfs_collect(name, graph, name_order, visited, [])
+          #(visited2, [comp, ..comps])
+        }
+      }
+    })
+  list.reverse(comps_rev)
+}
+
+fn dfs_collect(
+  name: String,
+  graph: dict.Dict(String, set.Set(String)),
+  name_order: List(String),
+  visited: set.Set(String),
+  comp: List(String),
+) -> #(set.Set(String), List(String)) {
+  case set.contains(visited, name) {
+    True -> #(visited, comp)
+    False -> {
+      let visited = set.insert(visited, name)
+      let neighbors = neighbors_in_order(name, graph, name_order)
+      let #(visited2, comp2) =
+        list.fold(neighbors, #(visited, comp), fn(acc, next) {
+          let #(v, c) = acc
+          dfs_collect(next, graph, name_order, v, c)
+        })
+      #(visited2, [name, ..comp2])
+    }
+  }
+}
+
+fn neighbors_in_order(
+  name: String,
+  graph: dict.Dict(String, set.Set(String)),
+  name_order: List(String),
+) -> List(String) {
+  case dict.get(graph, name) {
+    Ok(dep_set) ->
+      list.filter(name_order, fn(dep) { set.contains(dep_set, dep) })
+    Error(_) -> []
+  }
+}
+
+fn reverse_graph(
+  names: List(String),
+  graph: dict.Dict(String, set.Set(String)),
+) -> dict.Dict(String, set.Set(String)) {
+  let base =
+    list.fold(names, dict.new(), fn(acc, name) {
+      dict.insert(acc, name, set.new())
+    })
+  list.fold(names, base, fn(acc, name) {
+    case dict.get(graph, name) {
+      Ok(deps) ->
+        list.fold(set.to_list(deps), acc, fn(acc2, dep) {
+          let existing = case dict.get(acc2, dep) {
+            Ok(s) -> s
+            Error(_) -> set.new()
+          }
+          dict.insert(acc2, dep, set.insert(existing, name))
+        })
+      Error(_) -> acc
+    }
+  })
+}
+
+fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
+  case expr {
+    ast.Eprim(_, _) -> set.new()
+    ast.Evar(name, _) ->
+      case set.contains(bound, name) {
+        True -> set.new()
+        False -> set.insert(set.new(), name)
+      }
+    ast.Estr(_, templates, _) ->
+      list.fold(templates, set.new(), fn(acc, item) {
+        let #(expr, _, _) = item
+        set.union(acc, expr_free(expr, bound))
+      })
+    ast.Equot(_, _) -> set.new()
+    ast.Elambda(args, body, _) -> {
+      let bound_args =
+        list.fold(args, set.new(), fn(acc, pat) {
+          set.union(acc, pat_bound(pat))
+        })
+      expr_free(body, set.union(bound, bound_args))
+    }
+    ast.Eapp(target, args, _) -> {
+      let target_free = expr_free(target, bound)
+      list.fold(args, target_free, fn(acc, arg) {
+        set.union(acc, expr_free(arg, bound))
+      })
+    }
+    ast.Elet(bindings, body, _) -> {
+      let #(bound2, free) =
+        list.fold(bindings, #(bound, set.new()), fn(acc, binding) {
+          let #(bound_now, free_now) = acc
+          let #(pat, value) = binding
+          let free_value = expr_free(value, bound_now)
+          let bound_next = set.union(bound_now, pat_bound(pat))
+          #(bound_next, set.union(free_now, free_value))
+        })
+      set.union(free, expr_free(body, bound2))
+    }
+    ast.Ematch(target, cases, _) -> {
+      let target_free = expr_free(target, bound)
+      let cases_free =
+        list.fold(cases, set.new(), fn(acc, item) {
+          let #(pat, body) = item
+          let bound_case = set.union(bound, pat_bound(pat))
+          set.union(acc, expr_free(body, bound_case))
+        })
+      set.union(target_free, cases_free)
+    }
+  }
+}
+
+fn pat_bound(pat: ast.Pat) -> set.Set(String) {
+  case pat {
+    ast.Pany(_) -> set.new()
+    ast.Pvar(name, _) -> set.insert(set.new(), name)
+    ast.Pcon(_, _, args, _) ->
+      list.fold(args, set.new(), fn(acc, arg) { set.union(acc, pat_bound(arg)) })
+    ast.Pstr(_, _) -> set.new()
+    ast.Pprim(_, _) -> set.new()
+  }
 }
 
 pub const tbool: types.Type = types.Tcon("bool", -1)
