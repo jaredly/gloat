@@ -2,7 +2,7 @@ import glance as g
 import typechecker/ast
 import typechecker/builtins
 import typechecker/env
-import typechecker/glance
+import typechecker/glance as tc_glance
 import typechecker/infer
 import typechecker/scheme
 import typechecker/state
@@ -33,7 +33,7 @@ pub type TEnv =
   env.TEnv
 
 pub type ConvertError =
-  glance.Error
+  tc_glance.Error
 
 pub fn builtin_env() -> env.TEnv {
   builtins.builtin_env()
@@ -57,12 +57,12 @@ pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
 
 pub fn from_glance_expression(
   expr: g.Expression,
-) -> Result(ast.Expr, glance.Error) {
-  glance.expression(expr)
+) -> Result(ast.Expr, tc_glance.Error) {
+  tc_glance.expression(expr)
 }
 
 pub fn from_glance_module(
   module: g.Module,
-) -> Result(List(ast.Top), glance.Error) {
-  glance.module_to_tops(module)
+) -> Result(List(ast.Top), tc_glance.Error) {
+  tc_glance.module_to_tops(module)
 }

@@ -1,8 +1,8 @@
 import glance as g
+import gleam/int
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{None, Some}
 import gleam/result
-import gleam/string
 import typechecker/ast
 import typechecker/types
 
@@ -27,7 +27,7 @@ pub fn module_to_tops(module: g.Module) -> Result(List(ast.Top), Error) {
 pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
   case expr {
     g.Int(span, value) ->
-      case string.to_int(value) {
+      case int.parse(value) {
         Ok(int_value) ->
           Ok(ast.Eprim(
             ast.Pint(int_value, loc_from_span(span)),
@@ -56,29 +56,25 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
     g.Tuple(span, elements) ->
       case elements {
         [left, right] ->
-          result.map2(
-            expression(left),
-            expression(right),
-            fn(left_expr, right_expr) {
-              ast.Eapp(
-                ast.Evar(",", loc_from_span(span)),
-                [left_expr, right_expr],
-                loc_from_span(span),
-              )
-            },
-          )
+          map2(expression(left), expression(right), fn(left_expr, right_expr) {
+            ast.Eapp(
+              ast.Evar(",", loc_from_span(span)),
+              [left_expr, right_expr],
+              loc_from_span(span),
+            )
+          })
         _ -> Error(Unsupported("tuple arity"))
       }
 
     g.Call(span, function, arguments) ->
-      result.map2(
+      map2(
         expression(function),
         field_arguments(arguments),
         fn(func_expr, args) { ast.Eapp(func_expr, args, loc_from_span(span)) },
       )
 
     g.Fn(span, arguments, _return_annotation, body) ->
-      result.map2(
+      map2(
         fn_parameters(arguments),
         block_to_expression(body, loc_from_span(span)),
         fn(params, body_expr) {
@@ -90,39 +86,35 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
       block_to_expression(statements, loc_from_span(span))
 
     g.BinaryOperator(span, op, left, right) ->
-      result.map2(
-        expression(left),
-        expression(right),
-        fn(left_expr, right_expr) {
-          let name = case op {
-            g.AddInt -> Ok("+")
-            g.SubInt -> Ok("-")
-            g.LtInt -> Ok("<")
-            g.LtEqInt -> Ok("<=")
-            g.GtInt -> Ok(">")
-            g.GtEqInt -> Ok(">=")
-            g.Eq -> Ok("=")
-            g.NotEq -> Ok("!=")
-            _ -> Error(Unsupported("binary operator"))
-          }
+      map2(expression(left), expression(right), fn(left_expr, right_expr) {
+        let name = case op {
+          g.AddInt -> Ok("+")
+          g.SubInt -> Ok("-")
+          g.LtInt -> Ok("<")
+          g.LtEqInt -> Ok("<=")
+          g.GtInt -> Ok(">")
+          g.GtEqInt -> Ok(">=")
+          g.Eq -> Ok("=")
+          g.NotEq -> Ok("!=")
+          _ -> Error(Unsupported("binary operator"))
+        }
 
-          result.map(name, fn(n) {
-            ast.Eapp(
-              ast.Evar(n, loc_from_span(span)),
-              [left_expr, right_expr],
-              loc_from_span(span),
-            )
-          })
-        },
-      )
+        result.map(name, fn(n) {
+          ast.Eapp(
+            ast.Evar(n, loc_from_span(span)),
+            [left_expr, right_expr],
+            loc_from_span(span),
+          )
+        })
+      })
       |> result.flatten
 
     g.Case(span, subjects, clauses) ->
       case subjects {
         [subject] ->
-          result.map2(
+          map2(
             expression(subject),
-            list.map(clauses, clause_to_case),
+            result.all(list.map(clauses, clause_to_case)),
             fn(target_expr, cases) {
               ast.Ematch(target_expr, cases, loc_from_span(span))
             },
@@ -150,7 +142,7 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
     g.PatternVariable(span, name) -> Ok(ast.Pvar(name, loc_from_span(span)))
     g.PatternDiscard(span, _name) -> Ok(ast.Pany(loc_from_span(span)))
     g.PatternInt(span, value) ->
-      case string.to_int(value) {
+      case int.parse(value) {
         Ok(int_value) ->
           Ok(ast.Pprim(
             ast.Pint(int_value, loc_from_span(span)),
@@ -163,7 +155,7 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
     g.PatternTuple(span, elements) ->
       case elements {
         [left, right] ->
-          result.map2(pattern(left), pattern(right), fn(left_pat, right_pat) {
+          map2(pattern(left), pattern(right), fn(left_pat, right_pat) {
             ast.Pcon(
               ",",
               loc_from_span(span),
@@ -175,10 +167,10 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
       }
 
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
-      case #(module, with_spread) {
-        #(Some(_), _) -> Error(Unsupported("qualified constructor"))
-        #(_, True) -> Error(Unsupported("spread pattern"))
-        #(_, False) ->
+      case module, with_spread {
+        Some(_), _ -> Error(Unsupported("qualified constructor"))
+        _, True -> Error(Unsupported("spread pattern"))
+        _, False ->
           result.map(field_patterns(arguments), fn(args) {
             ast.Pcon(
               constructor,
@@ -204,7 +196,7 @@ fn clause_to_case(clause: g.Clause) -> Result(#(ast.Pat, ast.Expr), Error) {
     None ->
       case patterns {
         [[single]] ->
-          result.map2(pattern(single), expression(body), fn(pat, body_expr) {
+          map2(pattern(single), expression(body), fn(pat, body_expr) {
             #(pat, body_expr)
           })
         _ -> Error(Unsupported("case patterns"))
@@ -240,7 +232,7 @@ fn block_to_expression_loop(
     [g.Assignment(_span, kind, pat, _annotation, value), ..rest] ->
       case kind {
         g.Let ->
-          result.map2(pattern(pat), expression(value), fn(pat_expr, value_expr) {
+          map2(pattern(pat), expression(value), fn(pat_expr, value_expr) {
             block_to_expression_loop(
               rest,
               [#(pat_expr, value_expr), ..bindings],
@@ -309,9 +301,14 @@ fn definition_to_function(
   let g.Definition(_attributes, function) = def
   let g.Function(span, name, _pub, parameters, _return, body) = function
 
-  case list.filter(parameters, fn(p) { p.label != None }) {
+  case
+    list.filter(parameters, fn(p) {
+      let g.FunctionParameter(label, _name, _type_) = p
+      label != None
+    })
+  {
     [] ->
-      result.map2(
+      map2(
         function_parameters(parameters),
         block_to_expression(body, loc_from_span(span)),
         fn(params, body_expr) {
@@ -377,8 +374,8 @@ fn variant_fields(
 ) -> Result(List(types.Type), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.LabelledVariantField(type_, _label) -> type_(type_)
-      g.UnlabelledVariantField(type_) -> type_(type_)
+      g.LabelledVariantField(type_expr, _label) -> type_(type_expr)
+      g.UnlabelledVariantField(type_expr) -> type_(type_expr)
     }
   })
   |> result.all
@@ -397,13 +394,13 @@ fn function_parameters(
   |> result.all
 }
 
-fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
+pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
   case type_expr {
     g.NamedType(span, name, module, parameters) ->
       case module {
         Some(_) -> Error(Unsupported("qualified type"))
         None ->
-          result.map(list.map(parameters, type_), fn(params) {
+          result.map(result.all(list.map(parameters, type_)), fn(params) {
             list.fold(
               params,
               types.Tcon(name, loc_from_span(span)),
@@ -415,8 +412,8 @@ fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
     g.VariableType(span, name) -> Ok(types.Tvar(name, loc_from_span(span)))
 
     g.FunctionType(span, parameters, return_type) ->
-      result.map2(
-        list.map(parameters, type_),
+      map2(
+        result.all(list.map(parameters, type_)),
         type_(return_type),
         fn(args, result_type) {
           types.tfns(args, result_type, loc_from_span(span))
@@ -426,7 +423,7 @@ fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
     g.TupleType(span, elements) ->
       case elements {
         [left, right] ->
-          result.map2(type_(left), type_(right), fn(left_t, right_t) {
+          map2(type_(left), type_(right), fn(left_t, right_t) {
             types.Tapp(
               types.Tapp(
                 types.Tcon(",", loc_from_span(span)),
@@ -447,4 +444,8 @@ fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
 fn loc_from_span(span: g.Span) -> Int {
   let g.Span(start, _end) = span
   start
+}
+
+fn map2(a: Result(x, e), b: Result(y, e), f: fn(x, y) -> z) -> Result(z, e) {
+  result.try(a, fn(av) { result.map(b, fn(bv) { f(av, bv) }) })
 }
