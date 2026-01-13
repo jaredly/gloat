@@ -126,6 +126,16 @@ pub fn id_id_test() {
   assert process(code, "top") == "forall x:1:3 : (fn [x:1:3] x:1:3)"
 }
 
+pub fn tuple_test() {
+  let code = "const top = #(1, 2)"
+  assert process(code, "top") == "(, int int)"
+}
+
+pub fn tuple3_test() {
+  let code = "const top = #(1, 2, \"hi\")"
+  assert process(code, "top") == "(, int int string)"
+}
+
 fn process(code, name) {
   typechecker.scheme_to_string(infer_scheme_from_glance(code, name))
 }
