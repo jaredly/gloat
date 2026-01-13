@@ -116,6 +116,17 @@ pub fn pair(a, b) { #(a, b) }
     == "forall b:2 b:6 result:3 : (fn [(fn [(, (fn [b:2] result:3) b:6)] b:6) b:2] result:3)"
 }
 
+pub fn infer_with_binop() {
+  let code =
+    "
+fn even(x) {
+    x + 3
+}
+"
+  let scheme = infer_scheme_from_glance(code, "pair")
+  assert typechecker.scheme_to_string(scheme) == "fn [int] int"
+}
+
 fn infer_scheme_from_glance(code: String, name: String) -> typechecker.Scheme {
   let assert Ok(parsed) = glance.module(code)
   let tops = case typechecker.from_glance_module(parsed) {

@@ -15,27 +15,19 @@ pub fn add_def(
   expr: ast.Expr,
   loc: Int,
 ) -> env.TEnv {
-  state.run_empty(
-    state.bind(infer.new_type_var(name, name_loc), fn(self) {
-      let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
-      state.bind(infer.infer_expr(bound_env, expr), fn(type_) {
-        state.bind(state.apply_with(types.type_apply, self), fn(self_applied) {
-          state.bind(infer.unify(self_applied, type_, loc), fn(_) {
-            state.bind(
-              state.apply_with(types.type_apply, type_),
-              fn(type_applied) {
-                state.pure(env.with_type(
-                  env.empty(),
-                  name,
-                  env.generalize(tenv, type_applied),
-                ))
-              },
-            )
-          })
-        })
-      })
-    }),
-  )
+  state.run_empty({
+    use self <- state.bind(infer.new_type_var(name, name_loc))
+    let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
+    use type_ <- state.bind(infer.infer_expr(bound_env, expr))
+    use self_applied <- state.bind(state.apply_with(types.type_apply, self))
+    use _ignored <- state.bind(infer.unify(self_applied, type_, loc))
+    use type_applied <- state.bind(state.apply_with(types.type_apply, type_))
+    state.pure(env.with_type(
+      env.empty(),
+      name,
+      env.generalize(tenv, type_applied),
+    ))
+  })
 }
 
 pub fn add_defs(
@@ -53,76 +45,48 @@ pub fn add_defs(
       loc
     })
 
-  state.run_empty(
-    state.bind(
+  state.run_empty({
+    use vbls <- state.bind(
       state.map_list(defns, fn(args) {
         let #(name, name_loc, _expr, _loc) = args
         infer.new_type_var(name, name_loc)
       }),
-      fn(vbls) {
-        let bound_env =
-          list.fold(
-            list.zip(
-              names,
-              list.map(vbls, fn(v) { scheme.Forall(set.new(), v) }),
-            ),
-            tenv,
-            fn(acc, args) {
-              let #(name, vbl) = args
-              env.with_type(acc, name, vbl)
-            },
-          )
+    )
+    let bound_env =
+      list.fold(
+        list.zip(names, list.map(vbls, fn(v) { scheme.Forall(set.new(), v) })),
+        tenv,
+        fn(acc, args) {
+          let #(name, vbl) = args
+          env.with_type(acc, name, vbl)
+        },
+      )
 
-        state.bind(
-          state.map_list(defns, fn(args) {
-            let #(_, _, expr, _) = args
-            infer.infer_expr(bound_env, expr)
-          }),
-          fn(types_) {
-            state.bind(
-              state.map_list(vbls, fn(v) {
-                state.apply_with(types.type_apply, v)
-              }),
-              fn(vbls_applied) {
-                state.bind(
-                  state.each_list(
-                    list.zip(vbls_applied, list.zip(types_, locs)),
-                    fn(args) {
-                      let #(vbl, #(type_, loc)) = args
-                      infer.unify(vbl, type_, loc)
-                    },
-                  ),
-                  fn(_) {
-                    state.bind(
-                      state.map_list(types_, fn(t) {
-                        state.apply_with(types.type_apply, t)
-                      }),
-                      fn(types_applied) {
-                        let new_env =
-                          list.fold(
-                            list.zip(names, types_applied),
-                            env.empty(),
-                            fn(acc, args) {
-                              let #(name, type_) = args
-                              env.with_type(
-                                acc,
-                                name,
-                                env.generalize(tenv, type_),
-                              )
-                            },
-                          )
-                        state.pure(new_env)
-                      },
-                    )
-                  },
-                )
-              },
-            )
-          },
-        )
-      },
-    ),
-  )
+    use types_ <- state.bind(
+      state.map_list(defns, fn(args) {
+        let #(_, _, expr, _) = args
+        infer.infer_expr(bound_env, expr)
+      }),
+    )
+    use vbls_applied <- state.bind(
+      state.map_list(vbls, fn(v) { state.apply_with(types.type_apply, v) }),
+    )
+    use _ignored <- state.bind(
+      state.each_list(list.zip(vbls_applied, list.zip(types_, locs)), fn(args) {
+        let #(vbl, #(type_, loc)) = args
+        infer.unify(vbl, type_, loc)
+      }),
+    )
+    use types_applied <- state.bind(
+      state.map_list(types_, fn(t) { state.apply_with(types.type_apply, t) }),
+    )
+    let new_env =
+      list.fold(list.zip(names, types_applied), env.empty(), fn(acc, args) {
+        let #(name, type_) = args
+        env.with_type(acc, name, env.generalize(tenv, type_))
+      })
+    state.pure(new_env)
+  })
 }
 
 pub fn add_typealias(
@@ -203,11 +167,10 @@ pub fn add_stmt(tenv: env.TEnv, stmt: ast.Top) -> env.TEnv {
     ast.Tdef(name, name_loc, expr, loc) ->
       add_def(tenv, name, name_loc, expr, loc)
     ast.Texpr(expr, _loc) ->
-      state.run_empty(
-        state.bind(infer.infer_expr(tenv, expr), fn(_) {
-          state.pure(env.empty())
-        }),
-      )
+      state.run_empty({
+        use _ignored <- state.bind(infer.infer_expr(tenv, expr))
+        state.pure(env.empty())
+      })
     ast.Ttypealias(name, _name_loc, args, type_, _loc) ->
       add_typealias(tenv, name, args, type_)
     ast.Tdeftype(name, _name_loc, args, constrs, loc) ->

@@ -20,17 +20,16 @@ pub fn check_exhaustiveness(
   patterns: List(ast.Pat),
   loc: Int,
 ) -> state.State(Nil) {
-  state.bind(type_apply_state(target_type), fn(applied_target) {
-    let matrix =
-      list.map(patterns, fn(pat) {
-        [pattern_to_ex_pattern(tenv, #(pat, applied_target))]
-      })
+  use applied_target <- state.bind(type_apply_state(target_type))
+  let matrix =
+    list.map(patterns, fn(pat) {
+      [pattern_to_ex_pattern(tenv, #(pat, applied_target))]
+    })
 
-    case is_exhaustive(tenv, matrix) {
-      True -> state.pure(Nil)
-      False -> runtime.fatal("Match not exhaustive " <> int.to_string(loc))
-    }
-  })
+  case is_exhaustive(tenv, matrix) {
+    True -> state.pure(Nil)
+    False -> runtime.fatal("Match not exhaustive " <> int.to_string(loc))
+  }
 }
 
 pub fn pattern_to_ex_pattern(
