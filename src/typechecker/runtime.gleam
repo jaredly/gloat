@@ -1,23 +1,23 @@
 import gleam/string
 
 pub fn fatal(message: String) -> a {
-  panic(message)
+  panic as message
 }
 
-pub fn jsonify(_value: a) -> String {
-  "<json>"
+pub fn jsonify(value: a) -> String {
+  string.inspect(value)
 }
 
-pub fn value_to_string(_value: a) -> String {
-  "<value>"
+pub fn value_to_string(value: a) -> String {
+  string.inspect(value)
 }
 
 pub fn eval(_source: String) -> a {
-  panic("eval is not implemented")
+  panic as "eval is not implemented"
 }
 
 pub fn eval_with(_ctx: a, _source: String) -> b {
-  panic("eval_with is not implemented")
+  panic as "eval_with is not implemented"
 }
 
 pub fn error_to_string(f: fn(a) -> String, value: a) -> String {
@@ -32,6 +32,10 @@ pub fn sanitize(value: String) -> String {
   value
 }
 
-pub fn replace_all(value: String, pattern: String, replacement: String) -> String {
+pub fn replace_all(
+  value: String,
+  pattern: String,
+  replacement: String,
+) -> String {
   string.replace(value, pattern, replacement)
 }

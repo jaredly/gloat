@@ -1,7 +1,7 @@
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/set
-import gleam/string
 import typechecker/ast
 import typechecker/env
 import typechecker/exhaustive
@@ -17,8 +17,8 @@ pub fn infer_prim(prim: ast.Prim) -> types.Type {
   }
 }
 
-pub fn infer_quot(_quot: ast.Quot, loc: Int) -> types.Type {
-  case _quot {
+pub fn infer_quot(quot: ast.Quot, loc: Int) -> types.Type {
+  case quot {
     ast.QuotExpr(_) -> types.Tcon("expr", loc)
     ast.QuotTop(_) -> types.Tcon("top", loc)
     ast.QuotType(_) -> types.Tcon("type", loc)
@@ -51,7 +51,8 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
 
     ast.Estr(_, templates, loc) ->
       state.bind(
-        state.each_list(templates, fn(#(expr, _, _)) {
+        state.each_list(templates, fn(tuple) {
+          let #(expr, _, _) = tuple
           state.bind(infer_expr(tenv, expr), fn(t) {
             unify(t, types.Tcon("string", loc), loc)
           })
@@ -64,7 +65,8 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
         [] -> runtime.fatal("No args to lambda")
         [ast.Pvar(arg, arg_loc)] ->
           state.bind(new_type_var(arg, arg_loc), fn(arg_type) {
-            let bound_env = env.with_type(tenv, arg, scheme.Forall(set.new(), arg_type))
+            let bound_env =
+              env.with_type(tenv, arg, scheme.Forall(set.new(), arg_type))
             state.bind(infer_expr(bound_env, body), fn(body_type) {
               state.bind(type_apply_state(arg_type), fn(arg_type_applied) {
                 state.pure(types.tfn(arg_type_applied, body_type, loc))
@@ -73,7 +75,8 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
           })
 
         [pat] ->
-          state.bind(infer_pattern(tenv, pat), fn(#(arg_type, scope)) {
+          state.bind(infer_pattern(tenv, pat), fn(tuple) {
+            let #(arg_type, scope) = tuple
             state.bind(scope_apply_state(scope), fn(scope_applied) {
               let bound_env = env.with_scope(tenv, scope_applied)
               state.bind(infer_expr(bound_env, body), fn(body_type) {
@@ -85,7 +88,10 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
           })
 
         [one, ..rest] ->
-          infer_expr(tenv, ast.Elambda([one], ast.Elambda(rest, body, loc), loc))
+          infer_expr(
+            tenv,
+            ast.Elambda([one], ast.Elambda(rest, body, loc), loc),
+          )
       }
 
     ast.Eapp(target, args, loc) ->
@@ -96,12 +102,19 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
             state.bind(infer_expr(tenv, target), fn(target_type) {
               state.bind(tenv_apply_state(tenv), fn(arg_tenv) {
                 state.bind(infer_expr(arg_tenv, arg), fn(arg_type) {
-                  state.bind(type_apply_state(target_type), fn(target_type_applied) {
-                    state.bind(
-                      unify(target_type_applied, types.tfn(arg_type, result_var, loc), loc),
-                      fn(_) { type_apply_state(result_var) },
-                    )
-                  })
+                  state.bind(
+                    type_apply_state(target_type),
+                    fn(target_type_applied) {
+                      state.bind(
+                        unify(
+                          target_type_applied,
+                          types.tfn(arg_type, result_var, loc),
+                          loc,
+                        ),
+                        fn(_) { type_apply_state(result_var) },
+                      )
+                    },
+                  )
                 })
               })
             })
@@ -123,7 +136,8 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
           })
 
         [#(pat, value)] ->
-          state.bind(infer_pattern(tenv, pat), fn(#(type_, scope)) {
+          state.bind(infer_pattern(tenv, pat), fn(tuple) {
+            let #(type_, scope) = tuple
             state.bind(infer_expr(tenv, value), fn(value_type) {
               state.bind(unify(type_, value_type, loc), fn(_) {
                 state.bind(scope_apply_state(scope), fn(scope_applied) {
@@ -134,7 +148,8 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
             })
           })
 
-        [one, ..rest] -> infer_expr(tenv, ast.Elet([one], ast.Elet(rest, body, loc), loc))
+        [one, ..rest] ->
+          infer_expr(tenv, ast.Elet([one], ast.Elet(rest, body, loc), loc))
       }
 
     ast.Ematch(target, cases, loc) ->
@@ -144,8 +159,11 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
             state.foldl_list(
               cases,
               #(target_type, result_type),
-              fn(#(target_type_inner, result), #(pat, body)) {
-                state.bind(infer_pattern(tenv, pat), fn(#(type_, scope)) {
+              fn(args, args2) {
+                let #(target_type_inner, result) = args
+                let #(pat, body) = args2
+                state.bind(infer_pattern(tenv, pat), fn(args) {
+                  let #(type_, scope) = args
                   state.bind(unify(type_, target_type_inner, loc), fn(_) {
                     state.bind(scope_apply_state(scope), fn(scope_applied) {
                       let bound_env = env.with_scope(tenv, scope_applied)
@@ -159,8 +177,10 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
                             ),
                             fn(_) {
                               state.bind(state.get_subst(), fn(subst2) {
-                                let next_target = types.type_apply(subst2, target_type_inner)
-                                let next_result = types.type_apply(subst2, result)
+                                let next_target =
+                                  types.type_apply(subst2, target_type_inner)
+                                let next_result =
+                                  types.type_apply(subst2, result)
                                 state.pure(#(next_target, next_result))
                               })
                             },
@@ -172,10 +192,19 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
                 })
               },
             ),
-            fn(#(_target, final_result)) {
+            fn(args) {
+              let #(_target, final_result) = args
               state.bind(type_apply_state(target_type), fn(target_applied) {
                 state.bind(
-                  exhaustive.check_exhaustiveness(tenv, target_applied, list.map(cases, fn(#(pat, _)) { pat }), loc),
+                  exhaustive.check_exhaustiveness(
+                    tenv,
+                    target_applied,
+                    list.map(cases, fn(args) {
+                      let #(pat, _) = args
+                      pat
+                    }),
+                    loc,
+                  ),
                   fn(_) { state.pure(final_result) },
                 )
               })
@@ -186,8 +215,10 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
   }
 }
 
-pub fn infer_pattern(tenv: env.TEnv, pattern: ast.Pat) ->
-  state.State(#(types.Type, dict.Dict(String, scheme.Scheme))) {
+pub fn infer_pattern(
+  tenv: env.TEnv,
+  pattern: ast.Pat,
+) -> state.State(#(types.Type, dict.Dict(String, scheme.Scheme))) {
   case pattern {
     ast.Pvar(name, loc) ->
       state.bind(new_type_var(name, loc), fn(v) {
@@ -195,34 +226,52 @@ pub fn infer_pattern(tenv: env.TEnv, pattern: ast.Pat) ->
         state.pure(#(v, scope))
       })
 
-    ast.Pany(loc) -> state.bind(new_type_var("any", loc), fn(v) { state.pure(#(v, dict.new())) })
+    ast.Pany(loc) ->
+      state.bind(new_type_var("any", loc), fn(v) {
+        state.pure(#(v, dict.new()))
+      })
 
     ast.Pstr(_, loc) -> state.pure(#(types.Tcon("string", loc), dict.new()))
 
-    ast.Pprim(ast.Pbool(_, _), loc) -> state.pure(#(types.Tcon("bool", loc), dict.new()))
+    ast.Pprim(ast.Pbool(_, _), loc) ->
+      state.pure(#(types.Tcon("bool", loc), dict.new()))
 
-    ast.Pprim(ast.Pint(_, _), loc) -> state.pure(#(types.Tcon("int", loc), dict.new()))
+    ast.Pprim(ast.Pint(_, _), loc) ->
+      state.pure(#(types.Tcon("int", loc), dict.new()))
 
     ast.Pcon(name, _name_loc, args, loc) ->
-      state.bind(instantiate_tcon(tenv, name, loc), fn(#(cargs, cres)) {
-        state.bind(state.map_list(args, fn(arg) { infer_pattern(tenv, arg) }), fn(sub_patterns) {
-          let #(arg_types, scopes) = list.unzip(sub_patterns)
-          state.bind(
-            state.each_list(list.zip(arg_types, cargs), fn(#(ptype, ctype)) { unify(ptype, ctype, loc) }),
-            fn(_) {
-              state.bind(type_apply_state(cres), fn(cres_applied) {
-                let scope = list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-                state.pure(#(cres_applied, scope))
-              })
-            },
-          )
-        })
+      state.bind(instantiate_tcon(tenv, name, loc), fn(args2) {
+        let #(cargs, cres) = args2
+        state.bind(
+          state.map_list(args, fn(arg) { infer_pattern(tenv, arg) }),
+          fn(sub_patterns) {
+            let #(arg_types, scopes) = list.unzip(sub_patterns)
+            state.bind(
+              state.each_list(list.zip(arg_types, cargs), fn(args) {
+                let #(ptype, ctype) = args
+                unify(ptype, ctype, loc)
+              }),
+              fn(_) {
+                state.bind(type_apply_state(cres), fn(cres_applied) {
+                  let scope =
+                    list.fold(scopes, dict.new(), fn(acc, scope) {
+                      dict.merge(acc, scope)
+                    })
+                  state.pure(#(cres_applied, scope))
+                })
+              },
+            )
+          },
+        )
       })
   }
 }
 
-pub fn instantiate_tcon(tenv: env.TEnv, name: String, loc: Int) ->
-  state.State(#(List(types.Type), types.Type)) {
+pub fn instantiate_tcon(
+  tenv: env.TEnv,
+  name: String,
+  loc: Int,
+) -> state.State(#(List(types.Type), types.Type)) {
   let env.TEnv(_values, tcons, _types, _aliases) = tenv
   case dict.get(tcons, name) {
     Error(_) -> runtime.fatal("Unknown type constructor: " <> name)
@@ -237,14 +286,19 @@ pub fn instantiate_tcon(tenv: env.TEnv, name: String, loc: Int) ->
 
 pub fn new_type_var(name: String, loc: Int) -> state.State(types.Type) {
   state.bind(state.next_idx(), fn(idx) {
-    state.pure(types.Tvar(name <> ":" <> string.from_int(idx), loc))
+    state.pure(types.Tvar(name <> ":" <> int.to_string(idx), loc))
   })
 }
 
-pub fn make_subst_for_free(vars: set.Set(String), loc: Int) -> state.State(types.Subst) {
+pub fn make_subst_for_free(
+  vars: set.Set(String),
+  loc: Int,
+) -> state.State(types.Subst) {
   state.bind(
     state.map_list(set.to_list(vars), fn(id) {
-      state.bind(new_type_var(id, loc), fn(new_var) { state.pure(#(id, new_var)) })
+      state.bind(new_type_var(id, loc), fn(new_var) {
+        state.pure(#(id, new_var))
+      })
     }),
     fn(mapping) { state.pure(dict.from_list(mapping)) },
   )
@@ -252,30 +306,32 @@ pub fn make_subst_for_free(vars: set.Set(String), loc: Int) -> state.State(types
 
 pub fn instantiate(scheme_: scheme.Scheme, loc: Int) -> state.State(types.Type) {
   let scheme.Forall(vars, type_) = scheme_
-  state.bind(make_subst_for_free(vars, loc), fn(subst) { state.pure(types.type_apply(subst, type_)) })
+  state.bind(make_subst_for_free(vars, loc), fn(subst) {
+    state.pure(types.type_apply(subst, type_))
+  })
 }
 
 pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
-  case #(t1, t2) {
-    #(types.Tvar(var, _), t) -> var_bind(var, t, loc)
-    #(t, types.Tvar(var, _)) -> var_bind(var, t, loc)
-    #(types.Tcon(a, _), types.Tcon(b, _)) ->
+  case t1, t2 {
+    types.Tvar(var, _), t -> var_bind(var, t, loc)
+    t, types.Tvar(var, _) -> var_bind(var, t, loc)
+    types.Tcon(a, _), types.Tcon(b, _) ->
       case a == b {
         True -> state.pure(Nil)
         False ->
           runtime.fatal(
             "Incompatible concrete types: "
-              <> a
-              <> " ("
-              <> string.from_int(loc)
-              <> ") vs "
-              <> b
-              <> " ("
-              <> string.from_int(loc)
-              <> ")",
+            <> a
+            <> " ("
+            <> int.to_string(loc)
+            <> ") vs "
+            <> b
+            <> " ("
+            <> int.to_string(loc)
+            <> ")",
           )
       }
-    #(types.Tapp(t1a, a1, _), types.Tapp(t2a, a2, _)) ->
+    types.Tapp(t1a, a1, _), types.Tapp(t2a, a2, _) ->
       state.bind(unify(t1a, t2a, loc), fn(_) {
         state.bind(state.get_subst(), fn(subst) {
           let left = types.type_apply(subst, a1)
@@ -283,7 +339,13 @@ pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
           unify(left, right, loc)
         })
       })
-    _ -> runtime.fatal("Incompatible types: " <> runtime.jsonify(t1) <> " " <> runtime.jsonify(t2))
+    _, _ ->
+      runtime.fatal(
+        "Incompatible types: "
+        <> runtime.jsonify(t1)
+        <> " "
+        <> runtime.jsonify(t2),
+      )
   }
 }
 
@@ -292,12 +354,21 @@ pub fn var_bind(var: String, type_: types.Type, _loc: Int) -> state.State(Nil) {
     types.Tvar(v, _) ->
       case var == v {
         True -> state.pure(Nil)
-        False -> state.bind(state.put_subst(one_subst(var, type_)), fn(_) { state.pure(Nil) })
+        False ->
+          state.bind(state.put_subst(one_subst(var, type_)), fn(_) {
+            state.pure(Nil)
+          })
       }
     _ ->
       case set.contains(types.type_free(type_), var) {
-        True -> runtime.fatal("Cycle found while unifying type with type variable. " <> var)
-        False -> state.bind(state.put_subst(one_subst(var, type_)), fn(_) { state.pure(Nil) })
+        True ->
+          runtime.fatal(
+            "Cycle found while unifying type with type variable. " <> var,
+          )
+        False ->
+          state.bind(state.put_subst(one_subst(var, type_)), fn(_) {
+            state.pure(Nil)
+          })
       }
   }
 }
@@ -314,7 +385,8 @@ fn type_apply_state(type_: types.Type) -> state.State(types.Type) {
   state.apply_with(types.type_apply, type_)
 }
 
-fn scope_apply_state(scope: dict.Dict(String, scheme.Scheme)) ->
-  state.State(dict.Dict(String, scheme.Scheme)) {
+fn scope_apply_state(
+  scope: dict.Dict(String, scheme.Scheme),
+) -> state.State(dict.Dict(String, scheme.Scheme)) {
   state.apply_with(env.scope_apply, scope)
 }
