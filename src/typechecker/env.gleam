@@ -1,5 +1,6 @@
 import gleam/dict
 import gleam/list
+import gleam/option
 import gleam/set
 import typechecker/scheme
 import typechecker/types
@@ -7,7 +8,10 @@ import typechecker/types
 pub type TEnv {
   TEnv(
     values: dict.Dict(String, scheme.Scheme),
-    tcons: dict.Dict(String, #(List(String), List(types.Type), types.Type)),
+    tcons: dict.Dict(
+      String,
+      #(List(String), List(#(option.Option(String), types.Type)), types.Type),
+    ),
     types: dict.Dict(String, #(Int, set.Set(String))),
     aliases: dict.Dict(String, #(List(String), types.Type)),
   )

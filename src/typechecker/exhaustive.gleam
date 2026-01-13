@@ -94,7 +94,7 @@ pub fn pattern_to_ex_pattern(
           }
         _ -> runtime.fatal("Tuple pattern with non-tuple type")
       }
-    ast.Pcon(name, _name_loc, args, loc) -> {
+    ast.Pcon(name, _name_loc, fields, loc) -> {
       let #(tname, targs) = types.tcon_and_args(type_, [], loc)
       let env.TEnv(_values, tcons, _types, _aliases) = tenv
 
@@ -104,16 +104,76 @@ pub fn pattern_to_ex_pattern(
       }
 
       let subst = dict.from_list(list.zip(free_names, targs))
+      let aligned_fields = align_constructor_fields(fields, cargs, loc)
       let converted_args =
-        list.map(
-          list.zip(args, list.map(cargs, fn(t) { types.type_apply(subst, t) })),
-          fn(pair) {
-            let #(pat, type_) = pair
-            pattern_to_ex_pattern(tenv, #(pat, type_))
-          },
-        )
+        list.map(aligned_fields, fn(pair) {
+          let #(pat, cfield) = pair
+          let #(_label, type_) = cfield
+          pattern_to_ex_pattern(tenv, #(pat, types.type_apply(subst, type_)))
+        })
 
       ExConstructor(name, tname, converted_args)
+    }
+  }
+}
+
+fn align_constructor_fields(
+  fields: List(#(option.Option(String), ast.Pat)),
+  cfields: List(#(option.Option(String), types.Type)),
+  loc: Int,
+) -> List(#(ast.Pat, #(option.Option(String), types.Type))) {
+  case fields {
+    [] -> []
+    [field, ..rest] -> {
+      let #(label, pat) = field
+      case label {
+        option.None ->
+          case cfields {
+            [] ->
+              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+            [cfield, ..ctail] -> [
+              #(pat, cfield),
+              ..align_constructor_fields(rest, ctail, loc)
+            ]
+          }
+        option.Some(name) -> {
+          let #(maybe, remaining) = find_field(name, cfields, [])
+          case maybe {
+            option.None ->
+              runtime.fatal(
+                "Unknown field " <> name <> " " <> int.to_string(loc),
+              )
+            option.Some(cfield) -> [
+              #(pat, cfield),
+              ..align_constructor_fields(rest, remaining, loc)
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+fn find_field(
+  name: String,
+  cfields: List(#(option.Option(String), types.Type)),
+  acc: List(#(option.Option(String), types.Type)),
+) -> #(
+  option.Option(#(option.Option(String), types.Type)),
+  List(#(option.Option(String), types.Type)),
+) {
+  case cfields {
+    [] -> #(option.None, list.reverse(acc))
+    [field, ..rest] -> {
+      let #(label, _type) = field
+      case label {
+        option.Some(label_name) ->
+          case label_name == name {
+            True -> #(option.Some(field), list.append(list.reverse(acc), rest))
+            False -> find_field(name, rest, [field, ..acc])
+          }
+        option.None -> find_field(name, rest, [field, ..acc])
+      }
     }
   }
 }

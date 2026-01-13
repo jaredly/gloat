@@ -114,7 +114,7 @@ pub fn add_deftype(
   tenv: env.TEnv,
   name: String,
   args: List(#(String, Int)),
-  constrs: List(#(String, Int, List(types.Type), Int)),
+  constrs: List(#(String, Int, List(#(option.Option(String), types.Type)), Int)),
   loc: Int,
 ) -> env.TEnv {
   let free =
@@ -134,9 +134,16 @@ pub fn add_deftype(
   let parsed_constrs =
     list.map(constrs, fn(args) {
       let #(cname, _cloc, cargs, _cloc2) = args
-      let args1 = list.map(cargs, fn(t) { types.type_con_to_var(free_set, t) })
+      let args1 =
+        list.map(cargs, fn(field) {
+          let #(label, t) = field
+          #(label, types.type_con_to_var(free_set, t))
+        })
       let args2 =
-        list.map(args1, fn(t) { types.type_resolve_aliases(aliases, t) })
+        list.map(args1, fn(field) {
+          let #(label, t) = field
+          #(label, types.type_resolve_aliases(aliases, t))
+        })
       #(cname, #(free, args2, res))
     })
 
@@ -144,8 +151,13 @@ pub fn add_deftype(
     dict.from_list(
       list.map(parsed_constrs, fn(args) {
         let #(cname, #(free2, cargs, cres)) = args
+        let carg_types =
+          list.map(cargs, fn(field) {
+            let #(_label, t) = field
+            t
+          })
         let scheme_ =
-          scheme.Forall(set.from_list(free2), types.tfns(cargs, cres, loc))
+          scheme.Forall(set.from_list(free2), types.tfns(carg_types, cres, loc))
         #(cname, scheme_)
       }),
     )
@@ -433,6 +445,19 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         option.Some(expr) -> set.union(acc, expr_free(expr, bound))
       }
     }
+    ast.Erecord(_module, _name, fields, _) ->
+      list.fold(fields, set.new(), fn(acc, field) {
+        let #(_label, expr) = field
+        set.union(acc, expr_free(expr, bound))
+      })
+    ast.ErecordUpdate(_module, _name, record, fields, _) -> {
+      let record_free = expr_free(record, bound)
+      list.fold(fields, record_free, fn(acc, field) {
+        let #(_label, expr) = field
+        set.union(acc, expr_free(expr, bound))
+      })
+    }
+    ast.Efield(expr, _label, _) -> expr_free(expr, bound)
     ast.Elambda(args, body, _) -> {
       let bound_args =
         list.fold(args, set.new(), fn(acc, pat) {
@@ -510,7 +535,10 @@ fn pat_bound(pat: ast.Pat) -> set.Set(String) {
         set.union(acc, pat_bound(pat))
       })
     ast.Pcon(_, _, args, _) ->
-      list.fold(args, set.new(), fn(acc, arg) { set.union(acc, pat_bound(arg)) })
+      list.fold(args, set.new(), fn(acc, arg) {
+        let #(_label, pat) = arg
+        set.union(acc, pat_bound(pat))
+      })
     ast.Pstr(_, _) -> set.new()
     ast.Pprim(_, _) -> set.new()
   }
@@ -664,7 +692,7 @@ pub fn builtin_env() -> env.TEnv {
     ]),
     dict.from_list([
       #("()", #([], [], types.Tcon("()", -1))),
-      #(",", #(["a", "b"], [a, b], t_pair(a, b))),
+      #(",", #(["a", "b"], [#(option.None, a), #(option.None, b)], t_pair(a, b))),
     ]),
     dict.from_list([
       #("int", #(0, set.new())),

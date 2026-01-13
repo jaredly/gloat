@@ -7,6 +7,19 @@ import typechecker/ast
 import typechecker/env
 import typechecker/types
 
+type Lol {
+  Lol(name: Int)
+}
+
+fn ho(n: Lol) {
+  1
+}
+
+fn hi(v) {
+  ho(v)
+  v.name
+}
+
 pub fn main() -> Nil {
   gleeunit.main()
 }
@@ -219,6 +232,44 @@ const top = case \"ok\" {
 pub fn echo_from_glance_test() {
   let code = "const top = echo 1"
   assert process(code, "top") == "int"
+}
+
+pub fn record_constructor_from_glance_test() {
+  let code =
+    "
+type User { User(name: String, age: Int) }
+const top = User(name: \"A\", age: 1)
+"
+  assert process(code, "top") == "User"
+}
+
+pub fn record_constructor_positional_from_glance_test() {
+  let code =
+    "
+type User { User(name: String, age: Int) }
+const top = User(\"A\", 1)
+"
+  assert process(code, "top") == "User"
+}
+
+pub fn record_field_access_from_glance_test() {
+  let code =
+    "
+type User { User(name: String, age: Int) }
+const user = User(name: \"A\", age: 1)
+const top = user.age
+"
+  assert process(code, "top") == "int"
+}
+
+pub fn record_update_from_glance_test() {
+  let code =
+    "
+type User { User(name: String, age: Int) }
+const user = User(name: \"A\", age: 1)
+const top = User(..user, age: 2)
+"
+  assert process(code, "top") == "User"
 }
 
 fn process(code, name) {

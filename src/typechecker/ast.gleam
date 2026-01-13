@@ -17,7 +17,9 @@ pub type Top {
     name: String,
     name_loc: Loc,
     args: List(#(String, Loc)),
-    constructors: List(#(String, Loc, List(types.Type), Loc)),
+    constructors: List(
+      #(String, Loc, List(#(option.Option(String), types.Type)), Loc),
+    ),
     loc: Loc,
   )
   Ttypealias(
@@ -55,6 +57,20 @@ pub type Expr {
   Elist(List(Expr), option.Option(Expr), Loc)
   Ebitstring(List(#(Expr, List(BitStringSegmentOption(Expr)))), Loc)
   Eecho(option.Option(Expr), option.Option(Expr), Loc)
+  Erecord(
+    module: option.Option(String),
+    name: String,
+    fields: List(#(option.Option(String), Expr)),
+    loc: Loc,
+  )
+  ErecordUpdate(
+    module: option.Option(String),
+    name: String,
+    record: Expr,
+    fields: List(#(String, Expr)),
+    loc: Loc,
+  )
+  Efield(Expr, String, Loc)
   Elambda(List(Pat), Expr, Loc)
   Eapp(Expr, List(Expr), Loc)
   Elet(List(#(Pat, Expr)), Expr, Loc)
@@ -69,7 +85,7 @@ pub type Pat {
   Pas(String, Pat, Loc)
   Pconcat(String, option.Option(String), option.Option(String), Loc)
   Pbitstring(List(#(Pat, List(BitStringSegmentOption(Pat)))), Loc)
-  Pcon(String, Loc, List(Pat), Loc)
+  Pcon(String, Loc, List(#(option.Option(String), Pat)), Loc)
   Pstr(String, Loc)
   Pprim(Prim, Loc)
 }

@@ -91,8 +91,9 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
       map2(
         expression(function),
         field_arguments(arguments),
-        fn(func_expr, args) { ast.Eapp(func_expr, args, loc_from_span(span)) },
+        fn(func_expr, args) { call_with_fields(func_expr, args, span) },
       )
+      |> result.flatten
 
     g.Fn(span, arguments, _return_annotation, body) ->
       map2(
@@ -190,8 +191,25 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
         _ -> Error(Unsupported("case subject count"))
       }
 
-    g.RecordUpdate(_, _, _, _, _) | g.FieldAccess(_, _, _) ->
-      Error(Unsupported("expression"))
+    g.RecordUpdate(span, module, constructor, record, fields) ->
+      map2(
+        expression(record),
+        record_update_fields(fields),
+        fn(record_expr, update_fields) {
+          ast.ErecordUpdate(
+            module,
+            constructor,
+            record_expr,
+            update_fields,
+            loc_from_span(span),
+          )
+        },
+      )
+
+    g.FieldAccess(span, container, label) ->
+      result.map(expression(container), fn(expr) {
+        ast.Efield(expr, label, loc_from_span(span))
+      })
   }
 }
 
@@ -255,7 +273,6 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
 
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
       case module, with_spread {
-        option.Some(_), _ -> Error(Unsupported("qualified constructor"))
         _, True -> Error(Unsupported("spread pattern"))
         _, False ->
           result.map(field_patterns(arguments), fn(args) {
@@ -482,38 +499,119 @@ fn fn_capture_to_expr(
         ),
         fn(func_expr, args) {
           let #(before, after) = args
-          let loc = loc_from_span(span)
-          let capture_name = "capture"
-          let hole = ast.Evar(capture_name, loc)
-          let applied =
-            ast.Eapp(func_expr, list.append(before, [hole, ..after]), loc)
-          ast.Elambda([ast.Pvar(capture_name, loc)], applied, loc)
+          case
+            list.any(before, fn(arg) {
+              let #(label, _expr) = arg
+              label != option.None
+            })
+            || list.any(after, fn(arg) {
+              let #(label, _expr) = arg
+              label != option.None
+            })
+          {
+            True -> Error(Unsupported("labelled capture arguments"))
+            False -> {
+              let before_args =
+                list.map(before, fn(arg) {
+                  let #(_label, expr) = arg
+                  expr
+                })
+              let after_args =
+                list.map(after, fn(arg) {
+                  let #(_label, expr) = arg
+                  expr
+                })
+              let loc = loc_from_span(span)
+              let capture_name = "capture"
+              let hole = ast.Evar(capture_name, loc)
+              let applied =
+                ast.Eapp(
+                  func_expr,
+                  list.append(before_args, [hole, ..after_args]),
+                  loc,
+                )
+              Ok(ast.Elambda([ast.Pvar(capture_name, loc)], applied, loc))
+            }
+          }
         },
       )
+      |> result.flatten
   }
 }
 
 fn field_arguments(
   fields: List(g.Field(g.Expression)),
-) -> Result(List(ast.Expr), Error) {
+) -> Result(List(#(option.Option(String), ast.Expr)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.UnlabelledField(item) -> expression(item)
-      g.LabelledField(_, _, _) -> Error(Unsupported("labelled arguments"))
-      g.ShorthandField(_, _) -> Error(Unsupported("shorthand arguments"))
+      g.UnlabelledField(item) ->
+        result.map(expression(item), fn(expr) { #(option.None, expr) })
+      g.LabelledField(label, _loc, item) ->
+        result.map(expression(item), fn(expr) { #(option.Some(label), expr) })
+      g.ShorthandField(label, loc) ->
+        Ok(#(option.Some(label), ast.Evar(label, loc_from_span(loc))))
     }
   })
   |> result.all
 }
 
+fn call_with_fields(
+  func_expr: ast.Expr,
+  args: List(#(option.Option(String), ast.Expr)),
+  span: g.Span,
+) -> Result(ast.Expr, Error) {
+  case
+    list.all(args, fn(arg) {
+      let #(label, _expr) = arg
+      label == option.None
+    })
+  {
+    True ->
+      Ok(ast.Eapp(
+        func_expr,
+        list.map(args, fn(arg) {
+          let #(_label, expr) = arg
+          expr
+        }),
+        loc_from_span(span),
+      ))
+    False ->
+      case func_expr {
+        ast.Evar(name, _) ->
+          Ok(ast.Erecord(option.None, name, args, loc_from_span(span)))
+        ast.Efield(ast.Evar(module, _), name, _) ->
+          Ok(ast.Erecord(option.Some(module), name, args, loc_from_span(span)))
+        _ -> Error(Unsupported("labelled arguments"))
+      }
+  }
+}
+
+fn record_update_fields(
+  fields: List(g.RecordUpdateField(g.Expression)),
+) -> Result(List(#(String, ast.Expr)), Error) {
+  result.all(
+    list.map(fields, fn(field) {
+      let g.RecordUpdateField(label, item) = field
+      case item {
+        option.Some(expr) ->
+          result.map(expression(expr), fn(expr) { #(label, expr) })
+        option.None -> Ok(#(label, ast.Evar(label, 0)))
+      }
+    }),
+  )
+}
+
 fn field_patterns(
   fields: List(g.Field(g.Pattern)),
-) -> Result(List(ast.Pat), Error) {
+) -> Result(List(#(option.Option(String), ast.Pat)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.UnlabelledField(item) -> pattern(item)
-      g.LabelledField(_, _, _) -> Error(Unsupported("labelled constructor"))
-      g.ShorthandField(_, _) -> Error(Unsupported("shorthand constructor"))
+      g.UnlabelledField(item) ->
+        result.map(pattern(item), fn(pat) { #(option.None, pat) })
+      g.LabelledField(label, _loc, item) ->
+        result.map(pattern(item), fn(pat) { #(option.Some(label), pat) })
+      g.ShorthandField(label, loc) ->
+        Ok(#(option.Some(label), ast.Pvar(label, loc_from_span(loc))))
     }
   })
   |> result.all
@@ -604,7 +702,10 @@ fn definition_to_custom_type(
 fn custom_variants(
   variants: List(g.Variant),
   span: g.Span,
-) -> Result(List(#(String, Int, List(types.Type), Int)), Error) {
+) -> Result(
+  List(#(String, Int, List(#(option.Option(String), types.Type)), Int)),
+  Error,
+) {
   list.map(variants, fn(variant) {
     let g.Variant(name, fields, _attributes) = variant
     result.map(variant_fields(fields), fn(field_types) {
@@ -616,11 +717,13 @@ fn custom_variants(
 
 fn variant_fields(
   fields: List(g.VariantField),
-) -> Result(List(types.Type), Error) {
+) -> Result(List(#(option.Option(String), types.Type)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.LabelledVariantField(type_expr, _label) -> type_(type_expr)
-      g.UnlabelledVariantField(type_expr) -> type_(type_expr)
+      g.LabelledVariantField(type_expr, label) ->
+        result.map(type_(type_expr), fn(type_) { #(option.Some(label), type_) })
+      g.UnlabelledVariantField(type_expr) ->
+        result.map(type_(type_expr), fn(type_) { #(option.None, type_) })
     }
   })
   |> result.all

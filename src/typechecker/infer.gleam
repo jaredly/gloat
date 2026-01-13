@@ -126,6 +126,76 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
       }
     }
 
+    ast.Erecord(_module, name, fields, loc) -> {
+      use args2 <- state.bind(instantiate_tcon(tenv, name, loc))
+      let #(cfields, cres) = args2
+      let pairs = match_constructor_fields(fields, cfields, loc)
+      use _ignored <- state.bind(
+        state.each_list(pairs, fn(pair) {
+          let #(field, cfield) = pair
+          let #(_label, expr) = field
+          let #(_clabel, ctype) = cfield
+          use expr_type <- state.bind(infer_expr(tenv, expr))
+          unify(expr_type, ctype, loc)
+        }),
+      )
+      type_apply_state(cres)
+    }
+
+    ast.ErecordUpdate(_module, name, record, fields, loc) -> {
+      use args2 <- state.bind(instantiate_tcon(tenv, name, loc))
+      let #(cfields, cres) = args2
+      use record_type <- state.bind(infer_expr(tenv, record))
+      use _ignored <- state.bind(unify(record_type, cres, loc))
+      use _ignored2 <- state.bind(
+        state.each_list(fields, fn(field) {
+          let #(label, expr) = field
+          let ctype = lookup_constructor_field(label, cfields, loc)
+          use expr_type <- state.bind(infer_expr(tenv, expr))
+          unify(expr_type, ctype, loc)
+        }),
+      )
+      type_apply_state(cres)
+    }
+
+    ast.Efield(target, label, loc) -> {
+      use target_type <- state.bind(infer_expr(tenv, target))
+      use applied_target <- state.bind(type_apply_state(target_type))
+      case applied_target {
+        types.Tvar(_, _) ->
+          runtime.fatal(
+            "Record field access requires known type " <> int.to_string(loc),
+          )
+        _ -> {
+          let #(tname, targs) = types.tcon_and_args(applied_target, [], loc)
+          let env.TEnv(_values, tcons, types_map, _aliases) = tenv
+          let constructors = case dict.get(types_map, tname) {
+            Ok(#(_arity, names)) -> set.to_list(names)
+            Error(_) -> runtime.fatal("Unknown type name " <> tname)
+          }
+          case constructors {
+            [cname] -> {
+              let #(free, cfields, _cres) = case dict.get(tcons, cname) {
+                Ok(value) -> value
+                Error(_) -> runtime.fatal("Unknown constructor " <> cname)
+              }
+              let subst = dict.from_list(list.zip(free, targs))
+              let field_type =
+                types.type_apply(
+                  subst,
+                  lookup_constructor_field(label, cfields, loc),
+                )
+              state.pure(field_type)
+            }
+            _ ->
+              runtime.fatal(
+                "Record field access requires single-constructor type " <> tname,
+              )
+          }
+        }
+      }
+    }
+
     ast.Estr(_, templates, loc) -> {
       use _ignored <- state.bind(
         state.each_list(templates, fn(tuple) {
@@ -380,22 +450,26 @@ pub fn infer_pattern(
       state.pure(#(types.Ttuple(types_, loc), scope))
     }
 
-    ast.Pcon(name, _name_loc, args, loc) -> {
+    ast.Pcon(name, _name_loc, fields, loc) -> {
       use args2 <- state.bind(instantiate_tcon(tenv, name, loc))
-      let #(cargs, cres) = args2
-      use sub_patterns <- state.bind(
-        state.map_list(args, fn(arg) { infer_pattern(tenv, arg) }),
-      )
-      let #(arg_types, scopes) = list.unzip(sub_patterns)
-      use _ignored <- state.bind(
-        state.each_list(list.zip(arg_types, cargs), fn(args_pair) {
-          let #(ptype, ctype) = args_pair
-          unify(ptype, ctype, loc)
+      let #(cfields, cres) = args2
+      let pairs = match_constructor_fields(fields, cfields, loc)
+      use inferred <- state.bind(
+        state.map_list(pairs, fn(pair) {
+          let #(field, cfield) = pair
+          let #(_label, pat) = field
+          let #(_clabel, ctype) = cfield
+          use tuple <- state.bind(infer_pattern(tenv, pat))
+          let #(ptype, scope) = tuple
+          use _ignored <- state.bind(unify(ptype, ctype, loc))
+          state.pure(scope)
         }),
       )
       use cres_applied <- state.bind(type_apply_state(cres))
       let scope =
-        list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
+        list.fold(inferred, dict.new(), fn(acc, scope) {
+          dict.merge(acc, scope)
+        })
       state.pure(#(cres_applied, scope))
     }
   }
@@ -405,13 +479,17 @@ pub fn instantiate_tcon(
   tenv: env.TEnv,
   name: String,
   loc: Int,
-) -> state.State(#(List(types.Type), types.Type)) {
+) -> state.State(#(List(#(option.Option(String), types.Type)), types.Type)) {
   let env.TEnv(_values, tcons, _types, _aliases) = tenv
   case dict.get(tcons, name) {
     Error(_) -> runtime.fatal("Unknown type constructor: " <> name)
     Ok(#(free, cargs, cres)) -> {
       use subst <- state.bind(make_subst_for_free(set.from_list(free), loc))
-      let args = list.map(cargs, fn(t) { types.type_apply(subst, t) })
+      let args =
+        list.map(cargs, fn(field) {
+          let #(label, t) = field
+          #(label, types.type_apply(subst, t))
+        })
       let res = types.type_apply(subst, cres)
       state.pure(#(args, res))
     }
@@ -602,4 +680,86 @@ fn infer_bitstring_pat_options(
       _ -> state.pure(acc)
     }
   })
+}
+
+fn match_constructor_fields(
+  fields: List(#(option.Option(String), a)),
+  cfields: List(#(option.Option(String), b)),
+  loc: Int,
+) -> List(#(#(option.Option(String), a), #(option.Option(String), b))) {
+  case fields {
+    [] -> []
+    [field, ..rest] -> {
+      let #(label, _value) = field
+      case label {
+        option.None ->
+          case cfields {
+            [] ->
+              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+            [cfield, ..ctail] -> [
+              #(field, cfield),
+              ..match_constructor_fields(rest, ctail, loc)
+            ]
+          }
+        option.Some(name) -> {
+          let #(maybe, remaining) = find_field(name, cfields, [])
+          case maybe {
+            option.None ->
+              runtime.fatal(
+                "Unknown field " <> name <> " " <> int.to_string(loc),
+              )
+            option.Some(cfield) -> [
+              #(field, cfield),
+              ..match_constructor_fields(rest, remaining, loc)
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+fn find_field(
+  name: String,
+  cfields: List(#(option.Option(String), b)),
+  acc: List(#(option.Option(String), b)),
+) -> #(
+  option.Option(#(option.Option(String), b)),
+  List(#(option.Option(String), b)),
+) {
+  case cfields {
+    [] -> #(option.None, list.reverse(acc))
+    [field, ..rest] -> {
+      let #(label, _type) = field
+      case label {
+        option.Some(label_name) ->
+          case label_name == name {
+            True -> #(option.Some(field), list.append(list.reverse(acc), rest))
+            False -> find_field(name, rest, [field, ..acc])
+          }
+        option.None -> find_field(name, rest, [field, ..acc])
+      }
+    }
+  }
+}
+
+fn lookup_constructor_field(
+  label: String,
+  cfields: List(#(option.Option(String), types.Type)),
+  loc: Int,
+) -> types.Type {
+  case cfields {
+    [] -> runtime.fatal("Unknown field " <> label <> " " <> int.to_string(loc))
+    [field, ..rest] -> {
+      let #(maybe, t) = field
+      case maybe {
+        option.Some(name) ->
+          case name == label {
+            True -> t
+            False -> lookup_constructor_field(label, rest, loc)
+          }
+        option.None -> lookup_constructor_field(label, rest, loc)
+      }
+    }
+  }
 }
