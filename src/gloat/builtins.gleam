@@ -334,16 +334,58 @@ fn constant_to_def(
 fn function_to_def(
   defn: g.Definition(g.Function),
 ) -> #(String, Int, g.Expression, option.Option(g.Type), Int) {
-  let g.Definition(_attrs, function) = defn
+  let g.Definition(attrs, function) = defn
   let g.Function(span, name, _publicity, parameters, return, body) = function
-  let fn_params =
-    list.map(parameters, fn(param) {
-      let g.FunctionParameter(_label, name, type_) = param
-      g.FnParameter(name, type_)
-    })
-  let expr = g.Fn(span, fn_params, return, body)
   let loc = gleam_types.loc_from_span(span)
-  #(name, loc, expr, option.None, loc)
+  case is_external(attrs) && body == [] {
+    True -> {
+      let annotation = external_function_type(span, parameters, return, loc)
+      #(name, loc, g.Todo(span, option.None), option.Some(annotation), loc)
+    }
+    False -> {
+      let fn_params =
+        list.map(parameters, fn(param) {
+          let g.FunctionParameter(_label, name, type_) = param
+          g.FnParameter(name, type_)
+        })
+      let expr = g.Fn(span, fn_params, return, body)
+      #(name, loc, expr, option.None, loc)
+    }
+  }
+}
+
+fn is_external(attrs: List(g.Attribute)) -> Bool {
+  list.any(attrs, fn(attr) {
+    let g.Attribute(name, _arguments) = attr
+    name == "external"
+  })
+}
+
+fn external_function_type(
+  span: g.Span,
+  parameters: List(g.FunctionParameter),
+  return: option.Option(g.Type),
+  loc: Int,
+) -> g.Type {
+  let args =
+    list.map(parameters, fn(param) {
+      let g.FunctionParameter(_label, _name, type_) = param
+      case type_ {
+        option.Some(type_) -> type_
+        option.None ->
+          runtime.fatal(
+            "External function missing annotation " <> int.to_string(loc),
+          )
+      }
+    })
+  let return_type = case return {
+    option.Some(type_) -> type_
+    option.None ->
+      runtime.fatal(
+        "External function missing return type " <> int.to_string(loc),
+      )
+  }
+  g.FunctionType(span, args, return_type)
 }
 
 type DefInfo =
@@ -782,22 +824,22 @@ fn pat_bound(pat: g.Pattern) -> set.Set(String) {
   }
 }
 
-pub const tbool: types.Type = types.Tcon("bool", -1)
+pub const tbool: types.Type = types.Tcon("Bool", -1)
 
 pub fn tmap(k: types.Type, v: types.Type) -> types.Type {
-  types.Tapp(types.Tapp(types.Tcon("map", -1), k, -1), v, -1)
+  types.Tapp(types.Tapp(types.Tcon("Map", -1), k, -1), v, -1)
 }
 
 pub fn toption(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("option", -1), arg, -1)
+  types.Tapp(types.Tcon("Option", -1), arg, -1)
 }
 
 pub fn tlist(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("list", -1), arg, -1)
+  types.Tapp(types.Tcon("List", -1), arg, -1)
 }
 
 pub fn tset(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("set", -1), arg, -1)
+  types.Tapp(types.Tcon("Set", -1), arg, -1)
 }
 
 pub fn concrete(t: types.Type) -> scheme.Scheme {
@@ -816,7 +858,7 @@ pub fn t_pair(a: types.Type, b: types.Type) -> types.Type {
   types.Ttuple([a, b], -1)
 }
 
-pub const tstring: types.Type = types.Tcon("string", -1)
+pub const tstring: types.Type = types.Tcon("String", -1)
 
 pub fn builtin_env() -> env.TEnv {
   let k = vbl("k")
@@ -847,7 +889,7 @@ pub fn builtin_env() -> env.TEnv {
         kk(types.tfns(
           [
             types.Tapp(
-              types.Tcon("list", -1),
+              types.Tcon("List", -1),
               types.Tapp(types.Tcon("trace-fmt", -1), k, -1),
               -1,
             ),
@@ -861,7 +903,7 @@ pub fn builtin_env() -> env.TEnv {
       #("int/to_string", concrete(types.tfns([types.tint], tstring, -1))),
       #(
         "float/to_string",
-        concrete(types.tfns([types.Tcon("float", -1)], tstring, -1)),
+        concrete(types.tfns([types.Tcon("Float", -1)], tstring, -1)),
       ),
       #("string/append", concrete(types.tfns([tstring, tstring], tstring, -1))),
       #(
@@ -878,7 +920,7 @@ pub fn builtin_env() -> env.TEnv {
       ),
       #(
         "string-to-float",
-        concrete(types.tfns([tstring], toption(types.Tcon("float", -1)), -1)),
+        concrete(types.tfns([tstring], toption(types.Tcon("Float", -1)), -1)),
       ),
       #("map/nil", kv(tmap(k, v))),
       #("map/set", kv(types.tfns([tmap(k, v), k, v], tmap(k, v), -1))),
@@ -912,14 +954,14 @@ pub fn builtin_env() -> env.TEnv {
       #("valueToString", generic(["v"], types.tfns([vbl("v")], tstring, -1))),
       #(
         "eval",
-        generic(["v"], types.tfns([types.Tcon("string", -1)], vbl("v"), -1)),
+        generic(["v"], types.tfns([types.Tcon("String", -1)], vbl("v"), -1)),
       ),
       #(
         "eval-with",
         generic(
           ["ctx", "v"],
           types.tfns(
-            [types.Tcon("ctx", -1), types.Tcon("string", -1)],
+            [types.Tcon("ctx", -1), types.Tcon("String", -1)],
             vbl("v"),
             -1,
           ),
@@ -950,14 +992,14 @@ pub fn builtin_env() -> env.TEnv {
       #("False", #([], [], tbool)),
     ]),
     dict.from_list([
-      #("int", #(0, set.new())),
-      #("float", #(0, set.new())),
-      #("string", #(0, set.new())),
-      #("bool", #(0, set.new())),
-      #("bitstring", #(0, set.new())),
-      #("list", #(1, set.new())),
-      #("map", #(2, set.new())),
-      #("set", #(1, set.new())),
+      #("Int", #(0, set.new())),
+      #("Float", #(0, set.new())),
+      #("String", #(0, set.new())),
+      #("Bool", #(0, set.new())),
+      #("BitString", #(0, set.new())),
+      #("List", #(1, set.new())),
+      #("Map", #(2, set.new())),
+      #("Set", #(1, set.new())),
     ]),
     dict.new(),
     dict.new(),

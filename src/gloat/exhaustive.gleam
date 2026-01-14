@@ -42,15 +42,15 @@ pub fn pattern_to_ex_pattern(
   case pattern {
     g.PatternVariable(_, _) -> ExAny
     g.PatternDiscard(_, _) -> ExAny
-    g.PatternString(_, str) -> ExConstructor(str, "string", [])
+    g.PatternString(_, str) -> ExConstructor(str, "String", [])
     g.PatternInt(_, value) ->
       case int.parse(value) {
-        Ok(v) -> ExConstructor(int.to_string(v), "int", [])
+        Ok(v) -> ExConstructor(int.to_string(v), "Int", [])
         Error(_) -> runtime.fatal("Invalid int pattern")
       }
     g.PatternFloat(_, value) ->
       case float.parse(value) {
-        Ok(v) -> ExConstructor(float.to_string(v), "float", [])
+        Ok(v) -> ExConstructor(float.to_string(v), "Float", [])
         Error(_) -> runtime.fatal("Invalid float pattern")
       }
     g.PatternAssignment(_span, pat, _name) ->
@@ -58,20 +58,20 @@ pub fn pattern_to_ex_pattern(
     g.PatternConcatenate(_, _prefix, _prefix_name, _rest_name) -> ExAny
     g.PatternList(_, items, tail) ->
       case type_ {
-        types.Tapp(types.Tcon("list", _), elem_type, _) -> {
+        types.Tapp(types.Tcon("List", _), elem_type, _) -> {
           let base = case tail {
-            option.None -> ExConstructor("[]", "list", [])
+            option.None -> ExConstructor("[]", "List", [])
             option.Some(pat) -> pattern_to_ex_pattern(tenv, #(pat, type_))
           }
           list.fold_right(items, base, fn(acc, item) {
             let head = pattern_to_ex_pattern(tenv, #(item, elem_type))
-            ExConstructor("::", "list", [head, acc])
+            ExConstructor("::", "List", [head, acc])
           })
         }
         _ -> runtime.fatal("List pattern with non-list type")
       }
     g.PatternBitString(_, _segments) ->
-      ExConstructor("bitstring", "bitstring", [])
+      ExConstructor("bitstring", "BitString", [])
     g.PatternTuple(_span, items) ->
       case type_ {
         types.Ttuple(targs, _) ->
@@ -303,12 +303,12 @@ fn find_gid(heads: List(ExPattern)) -> Result(String, Nil) {
 
 fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
   case gid {
-    "int" -> []
-    "float" -> []
-    "bool" -> ["True", "False"]
-    "string" -> []
-    "list" -> ["[]", "::"]
-    "bitstring" -> []
+    "Int" -> []
+    "Float" -> []
+    "Bool" -> ["True", "False"]
+    "String" -> []
+    "List" -> ["[]", "::"]
+    "BitString" -> []
     "tuple" -> [","]
     _ -> {
       let env.TEnv(_values, _tcons, types, _aliases, _modules) = tenv

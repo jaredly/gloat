@@ -48,7 +48,7 @@ pub fn tfns(args: List(Type), body: Type, loc: Int) -> Type {
   }
 }
 
-pub const tint: Type = Tcon("int", -1)
+pub const tint: Type = Tcon("Int", -1)
 
 pub fn type_to_string_simple(type_: Type) -> String {
   case type_ {
