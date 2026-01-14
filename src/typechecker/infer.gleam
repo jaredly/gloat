@@ -209,52 +209,46 @@ fn infer_expr_inner(tenv: env.TEnv, expr: ast.Expr) -> state.State(types.Type) {
 
     ast.Elambda(args, body, loc) ->
       case args {
-        [] -> runtime.fatal("No args to lambda")
-        [ast.Pvar(arg, arg_loc)] -> {
-          use arg_type <- state.bind(new_type_var(arg, arg_loc))
-          let bound_env =
-            env.with_type(tenv, arg, scheme.Forall(set.new(), arg_type))
-          use body_type <- state.bind(infer_expr(bound_env, body))
-          use arg_type_applied <- state.bind(type_apply_state(arg_type))
-          state.pure(types.tfn(arg_type_applied, body_type, loc))
+        [] -> {
+          use body_type <- state.bind(infer_expr(tenv, body))
+          state.pure(types.Tfn([], body_type, loc))
         }
-
-        [pat] -> {
-          use tuple <- state.bind(infer_pattern(tenv, pat))
-          let #(arg_type, scope) = tuple
+        _ -> {
+          use inferred <- state.bind(
+            state.map_list(args, fn(pat) { infer_pattern(tenv, pat) }),
+          )
+          let #(arg_types, scopes) = list.unzip(inferred)
+          let scope =
+            list.fold(scopes, dict.new(), fn(acc, scope) {
+              dict.merge(acc, scope)
+            })
           use scope_applied <- state.bind(scope_apply_state(scope))
           let bound_env = env.with_scope(tenv, scope_applied)
           use body_type <- state.bind(infer_expr(bound_env, body))
-          use arg_type_applied <- state.bind(type_apply_state(arg_type))
-          state.pure(types.tfn(arg_type_applied, body_type, loc))
-        }
-
-        [one, ..rest] ->
-          infer_expr(
-            tenv,
-            ast.Elambda([one], ast.Elambda(rest, body, loc), loc),
+          use args_applied <- state.bind(
+            state.map_list(arg_types, fn(arg) { type_apply_state(arg) }),
           )
+          state.pure(types.Tfn(args_applied, body_type, loc))
+        }
       }
 
-    ast.Eapp(target, args, loc) ->
-      case args {
-        [] -> infer_expr(tenv, target)
-        [arg] -> {
-          use result_var <- state.bind(new_type_var("result", loc))
-          use target_type <- state.bind(infer_expr_inner(tenv, target))
+    ast.Eapp(target, args, loc) -> {
+      use result_var <- state.bind(new_type_var("result", loc))
+      use target_type <- state.bind(infer_expr_inner(tenv, target))
+      use arg_types <- state.bind(
+        state.map_list(args, fn(arg) {
           use arg_tenv <- state.bind(tenv_apply_state(tenv))
-          use arg_type <- state.bind(infer_expr_inner(arg_tenv, arg))
-          use target_type_applied <- state.bind(type_apply_state(target_type))
-          use _ignored <- state.bind(unify(
-            target_type_applied,
-            types.tfn(arg_type, result_var, loc),
-            loc,
-          ))
-          type_apply_state(result_var)
-        }
-        [one, ..rest] ->
-          infer_expr(tenv, ast.Eapp(ast.Eapp(target, [one], loc), rest, loc))
-      }
+          infer_expr_inner(arg_tenv, arg)
+        }),
+      )
+      use target_type_applied <- state.bind(type_apply_state(target_type))
+      use _ignored <- state.bind(unify(
+        target_type_applied,
+        types.Tfn(arg_types, result_var, loc),
+        loc,
+      ))
+      type_apply_state(result_var)
+    }
 
     ast.Elet(bindings, body, loc) ->
       case bindings {
@@ -547,6 +541,30 @@ pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
       let right = types.type_apply(subst, a2)
       unify(left, right, loc)
     }
+    types.Tfn(args1, res1, _), types.Tfn(args2, res2, _) ->
+      case list.length(args1) == list.length(args2) {
+        True -> {
+          use _ignored <- state.bind(
+            state.each_list(list.zip(args1, args2), fn(args) {
+              let #(left, right) = args
+              unify(left, right, loc)
+            }),
+          )
+          use subst <- state.bind(state.get_subst())
+          let left = types.type_apply(subst, res1)
+          let right = types.type_apply(subst, res2)
+          unify(left, right, loc)
+        }
+        False ->
+          runtime.fatal(
+            "Incompatible function arity "
+            <> int.to_string(loc)
+            <> " "
+            <> runtime.jsonify(t1)
+            <> " (vs) "
+            <> runtime.jsonify(t2),
+          )
+      }
     types.Ttuple(args1, _), types.Ttuple(args2, _) ->
       case list.length(args1) == list.length(args2) {
         True ->

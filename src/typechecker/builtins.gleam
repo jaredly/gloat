@@ -734,7 +734,6 @@ pub fn builtin_env() -> env.TEnv {
       #("list", #(1, set.new())),
       #("map", #(2, set.new())),
       #("set", #(1, set.new())),
-      #("->", #(2, set.new())),
     ]),
     dict.new(),
   )

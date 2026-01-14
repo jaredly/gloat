@@ -9,6 +9,7 @@ pub type Type {
   Tapp(Type, Type, Int)
   Tcon(String, Int)
   Ttuple(List(Type), Int)
+  Tfn(List(Type), Type, Int)
 }
 
 pub type Subst =
@@ -25,16 +26,26 @@ pub fn type_eq(one: Type, two: Type) -> Bool {
         let #(left, right) = pair
         type_eq(left, right)
       })
+    Tfn(args, res, _), Tfn(args2, res2, _) ->
+      list.length(args) == list.length(args2)
+      && list.all(list.zip(args, args2), fn(pair) {
+        let #(left, right) = pair
+        type_eq(left, right)
+      })
+      && type_eq(res, res2)
     _, _ -> False
   }
 }
 
 pub fn tfn(arg: Type, body: Type, loc: Int) -> Type {
-  Tapp(Tapp(Tcon("->", loc), arg, loc), body, loc)
+  Tfn([arg], body, loc)
 }
 
 pub fn tfns(args: List(Type), body: Type, loc: Int) -> Type {
-  list.fold_right(args, body, fn(acc, arg) { tfn(arg, acc, loc) })
+  case args {
+    [] -> body
+    _ -> Tfn(args, body, loc)
+  }
 }
 
 pub const tint: Type = Tcon("int", -1)
@@ -42,9 +53,9 @@ pub const tint: Type = Tcon("int", -1)
 pub fn type_to_string_simple(type_: Type) -> String {
   case type_ {
     Tvar(name, _) -> name
-    Tapp(Tapp(Tcon("->", _), arg, _), res, _) ->
+    Tfn(args, res, _) ->
       "(fn ["
-      <> type_to_string_simple(arg)
+      <> string.join(list.map(args, type_to_string_simple), with: " ")
       <> "] "
       <> type_to_string_simple(res)
       <> ")"
@@ -65,8 +76,7 @@ pub fn type_to_string_simple(type_: Type) -> String {
 pub fn type_to_string(type_: Type) -> String {
   case type_ {
     Tvar(name, _) -> name
-    Tapp(Tapp(Tcon("->", _), _, _), _, _) -> {
-      let #(args, result) = unwrap_fn(type_)
+    Tfn(args, result, _) -> {
       let args_s = list.map(args, type_to_string)
       "(fn ["
       <> string.join(args_s, with: " ")
@@ -91,10 +101,7 @@ pub fn type_to_string(type_: Type) -> String {
 
 pub fn unwrap_fn(type_: Type) -> #(List(Type), Type) {
   case type_ {
-    Tapp(Tapp(Tcon("->", _), a, _), b, _) -> {
-      let #(args, res) = unwrap_fn(b)
-      #([a, ..args], res)
-    }
+    Tfn(args, res, _) -> #(args, res)
     _ -> #([], type_)
   }
 }
@@ -113,6 +120,10 @@ pub fn type_free(type_: Type) -> set.Set(String) {
     Tapp(a, b, _) -> set.union(type_free(a), type_free(b))
     Ttuple(args, _) ->
       list.fold(args, set.new(), fn(acc, arg) { set.union(acc, type_free(arg)) })
+    Tfn(args, res, _) ->
+      list.fold(args, type_free(res), fn(acc, arg) {
+        set.union(acc, type_free(arg))
+      })
   }
 }
 
@@ -127,6 +138,12 @@ pub fn type_apply(subst: Subst, type_: Type) -> Type {
       Tapp(type_apply(subst, target), type_apply(subst, arg), loc)
     Ttuple(args, loc) ->
       Ttuple(list.map(args, fn(arg) { type_apply(subst, arg) }), loc)
+    Tfn(args, res, loc) ->
+      Tfn(
+        list.map(args, fn(arg) { type_apply(subst, arg) }),
+        type_apply(subst, res),
+        loc,
+      )
     _ -> type_
   }
 }
@@ -149,6 +166,12 @@ pub fn type_con_to_var(vars: set.Set(String), type_: Type) -> Type {
       Tapp(type_con_to_var(vars, a), type_con_to_var(vars, b), loc)
     Ttuple(args, loc) ->
       Ttuple(list.map(args, fn(arg) { type_con_to_var(vars, arg) }), loc)
+    Tfn(args, res, loc) ->
+      Tfn(
+        list.map(args, fn(arg) { type_con_to_var(vars, arg) }),
+        type_con_to_var(vars, res),
+        loc,
+      )
   }
 }
 
@@ -159,6 +182,7 @@ pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Int))) {
       #(target_inner, [#(arg, loc), ..inner])
     }
     Ttuple(_, _) -> #(type_, [])
+    Tfn(_, _, _) -> #(type_, [])
     _ -> #(type_, [])
   }
 }
@@ -181,6 +205,13 @@ pub fn tcon_and_args(
     Tcon(name, _) -> #(name, coll)
     Tapp(target, arg, _) -> tcon_and_args(target, [arg, ..coll], loc)
     Ttuple(args, _) -> #("tuple", args)
+    Tfn(_, _, _) ->
+      runtime.fatal(
+        "Function type not resolved "
+        <> runtime.jsonify(loc)
+        <> " "
+        <> runtime.jsonify(type_),
+      )
   }
 }
 
@@ -192,6 +223,12 @@ pub fn type_resolve_aliases(
     Ttuple(args, loc) ->
       Ttuple(
         list.map(args, fn(arg) { type_resolve_aliases(aliases, arg) }),
+        loc,
+      )
+    Tfn(args, res, loc) ->
+      Tfn(
+        list.map(args, fn(arg) { type_resolve_aliases(aliases, arg) }),
+        type_resolve_aliases(aliases, res),
         loc,
       )
     _ -> {

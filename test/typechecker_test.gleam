@@ -289,8 +289,8 @@ fn even(x) {
   let assert ast.Elambda(_, body, _) = expr
   case body {
     ast.Eapp(
-      ast.Eapp(ast.Evar("+", _), [ast.Evar("x", _)], _),
-      [ast.Eprim(ast.Pint(3, _), _)],
+      ast.Evar("+", _),
+      [ast.Evar("x", _), ast.Eprim(ast.Pint(3, _), _)],
       _,
     ) -> Nil
     _ -> panic as "unexpected binop conversion shape"
@@ -301,8 +301,8 @@ pub fn infer_binop_ast_test() {
   let loc = 0
   let body =
     ast.Eapp(
-      ast.Eapp(ast.Evar("+", loc), [ast.Evar("x", loc)], loc),
-      [ast.Eprim(ast.Pint(3, loc), loc)],
+      ast.Evar("+", loc),
+      [ast.Evar("x", loc), ast.Eprim(ast.Pint(3, loc), loc)],
       loc,
     )
   let expr = ast.Elambda([ast.Pvar("x", loc)], body, loc)
