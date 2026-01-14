@@ -99,14 +99,13 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
     g.Fn(span, arguments, _return_annotation, body) ->
       map2(
         fn_parameters(arguments),
-        block_to_expression(body, loc_from_span(span)),
+        block_to_expression(body, span),
         fn(params, body_expr) {
           ast.Elambda(params, body_expr, loc_from_span(span))
         },
       )
 
-    g.Block(span, statements) ->
-      block_to_expression(statements, loc_from_span(span))
+    g.Block(span, statements) -> block_to_expression(statements, span)
 
     g.BinaryOperator(span, op, left, right) ->
       map2(expression(left), expression(right), fn(left_expr, right_expr) {
@@ -359,15 +358,15 @@ fn pattern_list_tail(
 
 fn block_to_expression(
   statements: List(g.Statement),
-  loc: Int,
+  span: g.Span,
 ) -> Result(ast.Expr, Error) {
-  block_to_expression_loop(statements, [], loc)
+  block_to_expression_loop(statements, [], span)
 }
 
 fn block_to_expression_loop(
   statements: List(g.Statement),
   bindings: List(#(ast.Pat, ast.Expr)),
-  loc: Int,
+  span: g.Span,
 ) -> Result(ast.Expr, Error) {
   case statements {
     [] -> Error(Unsupported("empty block"))
@@ -376,7 +375,7 @@ fn block_to_expression_loop(
       result.map(expression(expr), fn(body_expr) {
         case bindings {
           [] -> body_expr
-          _ -> ast.Elet(list.reverse(bindings), body_expr, loc)
+          _ -> ast.Elet(list.reverse(bindings), body_expr, span)
         }
       })
 
@@ -389,7 +388,7 @@ fn block_to_expression_loop(
             block_to_expression_loop(
               rest,
               [#(pat_expr, value_expr), ..bindings],
-              loc,
+              span,
             )
           })
           |> result.flatten
@@ -636,7 +635,7 @@ fn record_update_fields(
       case item {
         option.Some(expr) ->
           result.map(expression(expr), fn(expr) { #(label, expr) })
-        option.None -> Ok(#(label, ast.Evar(label, 0)))
+        option.None -> Ok(#(label, ast.Evar(label, ast.unknown_loc)))
       }
     }),
   )
@@ -662,8 +661,8 @@ fn fn_parameters(params: List(g.FnParameter)) -> Result(List(ast.Pat), Error) {
   list.map(params, fn(param) {
     let g.FnParameter(name, _type_) = param
     case name {
-      g.Named(name) -> Ok(ast.Pvar(name, 0))
-      g.Discarded(_) -> Ok(ast.Pany(0))
+      g.Named(name) -> Ok(ast.Pvar(name, ast.unknown_loc))
+      g.Discarded(_) -> Ok(ast.Pany(ast.unknown_loc))
     }
   })
   |> result.all
@@ -694,10 +693,10 @@ fn definition_to_function(
     [] ->
       map2(
         function_parameters(parameters),
-        block_to_expression(body, loc_from_span(span)),
+        block_to_expression(body, span),
         fn(params, body_expr) {
-          let expr = ast.Elambda(params, body_expr, loc_from_span(span))
-          ast.Tdef(name, loc_from_span(span), expr, loc_from_span(span))
+          let expr = ast.Elambda(params, body_expr, span)
+          ast.Tdef(name, span, expr, span)
         },
       )
     _ -> Error(Unsupported("labelled parameters"))
@@ -744,7 +743,7 @@ fn custom_variants(
   variants: List(g.Variant),
   span: g.Span,
 ) -> Result(
-  List(#(String, Int, List(#(option.Option(String), types.Type)), Int)),
+  List(#(String, g.Span, List(#(option.Option(String), types.Type)), g.Span)),
   Error,
 ) {
   list.map(variants, fn(variant) {
@@ -776,8 +775,8 @@ fn function_parameters(
   list.map(params, fn(param) {
     let g.FunctionParameter(_label, name, _type_) = param
     case name {
-      g.Named(name) -> Ok(ast.Pvar(name, 0))
-      g.Discarded(_) -> Ok(ast.Pany(0))
+      g.Named(name) -> Ok(ast.Pvar(name, ast.unknown_loc))
+      g.Discarded(_) -> Ok(ast.Pany(ast.unknown_loc))
     }
   })
   |> result.all
@@ -824,9 +823,8 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
   }
 }
 
-fn loc_from_span(span: g.Span) -> Int {
-  let g.Span(start, _end) = span
-  start
+fn loc_from_span(span: g.Span) -> g.Span {
+  span
 }
 
 fn map2(a: Result(x, e), b: Result(y, e), f: fn(x, y) -> z) -> Result(z, e) {

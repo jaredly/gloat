@@ -1,8 +1,11 @@
+import glance as g
 import gleam/option
 import gloat/types
 
 pub type Loc =
-  Int
+  g.Span
+
+pub const unknown_loc: Loc = g.Span(-1, -1)
 
 pub type Prim {
   Pint(value: Int, loc: Loc)

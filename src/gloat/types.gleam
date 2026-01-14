@@ -211,25 +211,26 @@ pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Span))) {
 pub fn tcon_and_args(
   type_: Type,
   coll: List(Type),
-  loc: Int,
+  span: g.Span,
 ) -> #(String, List(Type)) {
   case type_ {
     Tvar(_, _) ->
       runtime.fatal(
         "Type not resolved "
-        <> runtime.jsonify(loc)
+        <> runtime.jsonify(span)
         <> " "
         <> runtime.jsonify(type_)
         <> " "
         <> runtime.jsonify(coll),
       )
     Tcon(name, _) -> #(name, coll)
-    Tapp(target, args, _) -> tcon_and_args(target, list.append(args, coll), loc)
+    Tapp(target, args, _) ->
+      tcon_and_args(target, list.append(args, coll), span)
     Ttuple(args, _) -> #("tuple", args)
     Tfn(_, _, _) ->
       runtime.fatal(
         "Function type not resolved "
-        <> runtime.jsonify(loc)
+        <> runtime.jsonify(span)
         <> " "
         <> runtime.jsonify(type_),
       )

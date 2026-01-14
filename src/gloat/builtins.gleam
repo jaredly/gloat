@@ -16,11 +16,12 @@ import gloat/types
 pub fn add_def(
   tenv: env.TEnv,
   name: String,
-  _name_loc: Int,
+  _name_loc: g.Span,
   expr: g.Expression,
   annotation: option.Option(g.Type),
-  loc: Int,
+  loc: g.Span,
 ) -> env.TEnv {
+  let loc_int = gleam_types.loc_from_span(loc)
   state.run_empty({
     use self <- state.bind(infer.new_type_var(name, types.unknown_span))
     let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
@@ -30,7 +31,7 @@ pub fn add_def(
         case gleam_types.type_(type_expr) {
           Ok(annot_type) -> infer.unify(type_, annot_type, loc)
           Error(_) ->
-            runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+            runtime.fatal("Unsupported annotation " <> int.to_string(loc_int))
         }
       option.None -> state.pure(Nil)
     })
@@ -47,7 +48,7 @@ pub fn add_def(
 
 pub fn add_defs(
   tenv: env.TEnv,
-  defns: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
+  defns: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
 ) -> env.TEnv {
   let names =
     list.map(defns, fn(args) {
@@ -91,13 +92,16 @@ pub fn add_defs(
     use _ignored_annotations <- state.bind(
       state.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
         let #(type_, #(annotation, loc)) = args
+        let loc_int = gleam_types.loc_from_span(loc)
         case annotation {
           option.None -> state.pure(Nil)
           option.Some(type_expr) ->
             case gleam_types.type_(type_expr) {
               Ok(annot_type) -> infer.unify(type_, annot_type, loc)
               Error(_) ->
-                runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+                runtime.fatal(
+                  "Unsupported annotation " <> int.to_string(loc_int),
+                )
             }
         }
       }),
@@ -126,7 +130,7 @@ pub fn add_defs(
 pub fn add_typealias(
   _tenv: env.TEnv,
   name: String,
-  args: List(#(String, Int)),
+  args: List(#(String, g.Span)),
   type_: types.Type,
 ) -> env.TEnv {
   let free =
@@ -147,9 +151,11 @@ pub fn add_typealias(
 pub fn add_deftype(
   tenv: env.TEnv,
   name: String,
-  args: List(#(String, Int)),
-  constrs: List(#(String, Int, List(#(option.Option(String), types.Type)), Int)),
-  _loc: Int,
+  args: List(#(String, g.Span)),
+  constrs: List(
+    #(String, g.Span, List(#(option.Option(String), types.Type)), g.Span),
+  ),
+  _loc: g.Span,
 ) -> env.TEnv {
   let free =
     list.map(args, fn(args) {
@@ -283,7 +289,7 @@ fn module_key(module_name: String) -> String {
 
 fn add_defs_grouped(
   tenv: env.TEnv,
-  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
+  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
 ) -> env.TEnv {
   case defs {
     [] -> env.empty()
@@ -303,11 +309,12 @@ fn add_typealias_def(
 ) -> env.TEnv {
   let g.Definition(_attrs, type_alias) = defn
   let g.TypeAlias(span, name, _publicity, parameters, aliased) = type_alias
-  let loc = gleam_types.loc_from_span(span)
-  let args = list.map(parameters, fn(param) { #(param, loc) })
+  let loc_int = gleam_types.loc_from_span(span)
+  let args = list.map(parameters, fn(param) { #(param, span) })
   let type_ = case gleam_types.type_(aliased) {
     Ok(type_) -> type_
-    Error(_) -> runtime.fatal("Unsupported alias type " <> int.to_string(loc))
+    Error(_) ->
+      runtime.fatal("Unsupported alias type " <> int.to_string(loc_int))
   }
   add_typealias(tenv, name, args, type_)
 }
@@ -319,40 +326,40 @@ fn add_custom_type_def(
   let g.Definition(_attrs, custom_type) = defn
   let g.CustomType(span, name, _publicity, _opaque, parameters, variants) =
     custom_type
-  let loc = gleam_types.loc_from_span(span)
-  let args = list.map(parameters, fn(param) { #(param, loc) })
+  let loc_int = gleam_types.loc_from_span(span)
+  let args = list.map(parameters, fn(param) { #(param, span) })
   let constrs =
     list.map(variants, fn(variant) {
       let g.Variant(cname, fields, _attributes) = variant
       let field_types = case gleam_types.variant_fields(fields) {
         Ok(field_types) -> field_types
         Error(_) ->
-          runtime.fatal("Unsupported constructor fields " <> int.to_string(loc))
+          runtime.fatal(
+            "Unsupported constructor fields " <> int.to_string(loc_int),
+          )
       }
-      #(cname, loc, field_types, loc)
+      #(cname, span, field_types, span)
     })
-  add_deftype(tenv, name, args, constrs, loc)
+  add_deftype(tenv, name, args, constrs, span)
 }
 
 fn constant_to_def(
   defn: g.Definition(g.Constant),
-) -> #(String, Int, g.Expression, option.Option(g.Type), Int) {
+) -> #(String, g.Span, g.Expression, option.Option(g.Type), g.Span) {
   let g.Definition(_attrs, constant) = defn
   let g.Constant(span, name, _publicity, annotation, value) = constant
-  let loc = gleam_types.loc_from_span(span)
-  #(name, loc, value, annotation, loc)
+  #(name, span, value, annotation, span)
 }
 
 fn function_to_def(
   defn: g.Definition(g.Function),
-) -> #(String, Int, g.Expression, option.Option(g.Type), Int) {
+) -> #(String, g.Span, g.Expression, option.Option(g.Type), g.Span) {
   let g.Definition(attrs, function) = defn
   let g.Function(span, name, _publicity, parameters, return, body) = function
-  let loc = gleam_types.loc_from_span(span)
   case is_external(attrs) && body == [] {
     True -> {
-      let annotation = external_function_type(span, parameters, return, loc)
-      #(name, loc, g.Todo(span, option.None), option.Some(annotation), loc)
+      let annotation = external_function_type(span, parameters, return)
+      #(name, span, g.Todo(span, option.None), option.Some(annotation), span)
     }
     False -> {
       let fn_params =
@@ -361,7 +368,7 @@ fn function_to_def(
           g.FnParameter(name, type_)
         })
       let expr = g.Fn(span, fn_params, return, body)
-      #(name, loc, expr, option.None, loc)
+      #(name, span, expr, option.None, span)
     }
   }
 }
@@ -377,8 +384,8 @@ fn external_function_type(
   span: g.Span,
   parameters: List(g.FunctionParameter),
   return: option.Option(g.Type),
-  loc: Int,
 ) -> g.Type {
+  let loc = gleam_types.loc_from_span(span)
   let args =
     list.map(parameters, fn(param) {
       let g.FunctionParameter(_label, _name, type_) = param
@@ -401,11 +408,11 @@ fn external_function_type(
 }
 
 type DefInfo =
-  #(String, Int, g.Expression, option.Option(g.Type), Int, Int)
+  #(String, g.Span, g.Expression, option.Option(g.Type), g.Span, Int)
 
 fn group_mutual_defs(
-  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
-) -> List(List(#(String, Int, g.Expression, option.Option(g.Type), Int))) {
+  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
+) -> List(List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span))) {
   let defs_in_order = list.reverse(defs)
   let infos = def_infos(defs_in_order)
   let groups = def_info_groups(infos)
@@ -418,7 +425,7 @@ fn group_mutual_defs(
 }
 
 fn def_infos(
-  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
+  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
 ) -> List(DefInfo) {
   let #(_idx, infos_rev) =
     list.fold(defs, #(0, []), fn(acc, def) {
@@ -1144,7 +1151,7 @@ pub fn builtin_env() -> env.TEnv {
       #("Nil", #([], [], types.Tcon("Nil", types.unknown_span))),
       #("Error", #(
         ["a", "b"],
-        [#(option.None, a)],
+        [#(option.None, b)],
         types.Tapp(
           types.Tcon("Result", types.unknown_span),
           [a, b],
@@ -1153,7 +1160,7 @@ pub fn builtin_env() -> env.TEnv {
       )),
       #("Ok", #(
         ["a", "b"],
-        [#(option.None, b)],
+        [#(option.None, a)],
         types.Tapp(
           types.Tcon("Result", types.unknown_span),
           [a, b],

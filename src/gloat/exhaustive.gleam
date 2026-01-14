@@ -6,6 +6,7 @@ import gleam/list
 import gleam/option
 import gleam/set
 import gloat/env
+import gloat/gleam_types
 import gloat/runtime
 import gloat/state
 import gloat/types
@@ -20,8 +21,9 @@ pub fn check_exhaustiveness(
   tenv: env.TEnv,
   target_type: types.Type,
   patterns: List(g.Pattern),
-  loc: Int,
+  span: g.Span,
 ) -> state.State(Nil) {
+  let loc = gleam_types.loc_from_span(span)
   use applied_target <- state.bind(type_apply_state(target_type))
   let matrix =
     list.map(patterns, fn(pat) {
@@ -90,8 +92,7 @@ pub fn pattern_to_ex_pattern(
         _ -> runtime.fatal("Tuple pattern with non-tuple type")
       }
     g.PatternVariant(span, _module, name, arguments, with_spread) -> {
-      let loc = span_loc(span)
-      let #(tname, targs) = types.tcon_and_args(type_, [], loc)
+      let #(tname, targs) = types.tcon_and_args(type_, [], span)
       let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
 
       let #(free_names, cargs, _cres) = case dict.get(tcons, name) {
@@ -101,7 +102,7 @@ pub fn pattern_to_ex_pattern(
 
       let subst = dict.from_list(list.zip(free_names, targs))
       let fields = list.map(arguments, fn(field) { pattern_field(field) })
-      let aligned = align_constructor_fields(fields, cargs, loc, with_spread)
+      let aligned = align_constructor_fields(fields, cargs, span, with_spread)
       let converted_args =
         list.map(list.zip(aligned, cargs), fn(pair) {
           let #(maybe_pat, cfield) = pair
@@ -134,9 +135,10 @@ fn pattern_field(
 fn align_constructor_fields(
   fields: List(#(option.Option(String), g.Pattern)),
   cfields: List(#(option.Option(String), types.Type)),
-  loc: Int,
+  span: g.Span,
   allow_missing: Bool,
 ) -> List(option.Option(g.Pattern)) {
+  let loc = gleam_types.loc_from_span(span)
   let indexed = index_list(cfields)
   let labels =
     list.filter_map(indexed, fn(entry) {
@@ -211,11 +213,6 @@ fn index_list(items: List(a)) -> List(#(Int, a)) {
       #(idx + 1, [#(idx, item), ..items])
     })
   list.reverse(acc)
-}
-
-fn span_loc(span: g.Span) -> Int {
-  let g.Span(start, _end) = span
-  start
 }
 
 fn any_list(arity: Int) -> List(ExPattern) {
