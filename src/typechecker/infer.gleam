@@ -210,8 +210,15 @@ fn infer_expr_inner(
       let loc = gleam_types.loc_from_span(span)
       case container {
         g.Variable(_span, module_name) ->
-          case env.resolve(tenv, module_name <> "/" <> label) {
-            Ok(scheme_) -> instantiate(scheme_, loc)
+          case env.resolve_module(tenv, module_name) {
+            Ok(module_key) ->
+              case env.resolve(tenv, module_key <> "/" <> label) {
+                Ok(scheme_) -> instantiate(scheme_, loc)
+                Error(_) ->
+                  runtime.fatal(
+                    "Unknown module value " <> module_key <> "/" <> label,
+                  )
+              }
             Error(_) -> {
               use target_type <- state.bind(infer_expr(tenv, container))
               use applied_target <- state.bind(type_apply_state(target_type))
@@ -224,7 +231,8 @@ fn infer_expr_inner(
                 _ -> {
                   let #(tname, targs) =
                     types.tcon_and_args(applied_target, [], loc)
-                  let env.TEnv(_values, tcons, types_map, _aliases) = tenv
+                  let env.TEnv(_values, tcons, types_map, _aliases, _modules) =
+                    tenv
                   let constructors = case dict.get(types_map, tname) {
                     Ok(#(_arity, names)) -> set.to_list(names)
                     Error(_) -> runtime.fatal("Unknown type name " <> tname)
@@ -266,7 +274,7 @@ fn infer_expr_inner(
               )
             _ -> {
               let #(tname, targs) = types.tcon_and_args(applied_target, [], loc)
-              let env.TEnv(_values, tcons, types_map, _aliases) = tenv
+              let env.TEnv(_values, tcons, types_map, _aliases, _modules) = tenv
               let constructors = case dict.get(types_map, tname) {
                 Ok(#(_arity, names)) -> set.to_list(names)
                 Error(_) -> runtime.fatal("Unknown type name " <> tname)
@@ -579,7 +587,7 @@ fn constructor_name(
   case name {
     option.None -> option.None
     option.Some(name) -> {
-      let env.TEnv(_values, tcons, _types, _aliases) = tenv
+      let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
       case dict.get(tcons, name) {
         Ok(_) -> option.Some(name)
         Error(_) -> option.None
@@ -1245,7 +1253,7 @@ pub fn instantiate_tcon(
   name: String,
   loc: Int,
 ) -> state.State(#(List(#(option.Option(String), types.Type)), types.Type)) {
-  let env.TEnv(_values, tcons, _types, _aliases) = tenv
+  let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
   case dict.get(tcons, name) {
     Error(_) -> runtime.fatal("Unknown type constructor: " <> name)
     Ok(#(free, cargs, cres)) -> {

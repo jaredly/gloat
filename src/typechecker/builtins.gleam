@@ -4,6 +4,7 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
+import gleam/string
 import typechecker/env
 import typechecker/gleam_types
 import typechecker/infer
@@ -139,6 +140,7 @@ pub fn add_typealias(
     dict.new(),
     dict.new(),
     dict.from_list([#(name, #(free, alias_type))]),
+    dict.new(),
   )
 }
 
@@ -161,7 +163,7 @@ pub fn add_deftype(
       types.Tapp(inner, types.Tvar(arg_name, arg_loc), loc)
     })
 
-  let env.TEnv(_values, _tcons, _types, aliases) = tenv
+  let env.TEnv(_values, _tcons, _types, aliases, _modules) = tenv
 
   let parsed_constrs =
     list.map(constrs, fn(args) {
@@ -204,23 +206,25 @@ pub fn add_deftype(
     )
   let types_map = dict.from_list([#(name, #(list.length(args), type_names))])
 
-  env.TEnv(values, tcons, types_map, dict.new())
+  env.TEnv(values, tcons, types_map, dict.new(), dict.new())
 }
 
 pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
   let g.Module(_imports, custom_types, type_aliases, constants, functions) =
     module
+  let import_env = add_imports(tenv, module)
+  let tenv_with_imports = env.merge(tenv, import_env)
   let alias_env =
     list.fold(type_aliases, env.empty(), fn(acc, defn) {
-      env.merge(acc, add_typealias_def(tenv, defn))
+      env.merge(acc, add_typealias_def(tenv_with_imports, defn))
     })
-  let tenv_with_aliases = env.merge(tenv, alias_env)
+  let tenv_with_aliases = env.merge(tenv_with_imports, alias_env)
   let types_env =
     list.fold(custom_types, env.empty(), fn(acc, defn) {
       env.merge(acc, add_custom_type_def(tenv_with_aliases, defn))
     })
   let type_env = env.merge(alias_env, types_env)
-  let tenv_with_types = env.merge(tenv, type_env)
+  let tenv_with_types = env.merge(tenv_with_imports, type_env)
   let defs =
     list.append(
       list.map(constants, constant_to_def),
@@ -228,6 +232,41 @@ pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
     )
   let defs_env = add_defs_grouped(tenv_with_types, defs)
   env.merge(tenv_with_types, defs_env)
+}
+
+fn add_imports(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+  let g.Module(imports, _custom_types, _type_aliases, _constants, _functions) =
+    module
+  list.fold(imports, env.empty(), fn(acc, defn) {
+    let g.Definition(_attrs, import_) = defn
+    let g.Import(_loc, module_name, alias, _types, values) = import_
+    let base = module_key(module_name)
+    let acc_with_module = case alias {
+      option.None -> env.with_module(acc, base, base)
+      option.Some(g.Named(name)) -> env.with_module(acc, name, base)
+      option.Some(g.Discarded(_)) -> acc
+    }
+    list.fold(values, acc_with_module, fn(acc2, value) {
+      let g.UnqualifiedImport(name, alias) = value
+      let target = case alias {
+        option.None -> name
+        option.Some(alias_name) -> alias_name
+      }
+      let qualified = base <> "/" <> name
+      case env.resolve(tenv, qualified) {
+        Ok(scheme_) -> env.with_type(acc2, target, scheme_)
+        Error(_) -> runtime.fatal("Unknown import value " <> qualified)
+      }
+    })
+  })
+}
+
+fn module_key(module_name: String) -> String {
+  let parts = string.split(module_name, "/")
+  case list.reverse(parts) {
+    [last, ..] -> last
+    [] -> module_name
+  }
 }
 
 fn add_defs_grouped(
@@ -920,6 +959,7 @@ pub fn builtin_env() -> env.TEnv {
       #("map", #(2, set.new())),
       #("set", #(1, set.new())),
     ]),
+    dict.new(),
     dict.new(),
   )
 }

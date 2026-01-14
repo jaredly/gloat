@@ -92,7 +92,7 @@ pub fn pattern_to_ex_pattern(
     g.PatternVariant(span, _module, name, arguments, with_spread) -> {
       let loc = span_loc(span)
       let #(tname, targs) = types.tcon_and_args(type_, [], loc)
-      let env.TEnv(_values, tcons, _types, _aliases) = tenv
+      let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
 
       let #(free_names, cargs, _cres) = case dict.get(tcons, name) {
         Error(_) -> runtime.fatal("Unknown type constructor " <> name)
@@ -311,7 +311,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
     "bitstring" -> []
     "tuple" -> [","]
     _ -> {
-      let env.TEnv(_values, _tcons, types, _aliases) = tenv
+      let env.TEnv(_values, _tcons, types, _aliases, _modules) = tenv
       case dict.get(types, gid) {
         Error(_) -> runtime.fatal("Unknown type name " <> gid)
         Ok(#(_arity, names)) -> set.to_list(names)
