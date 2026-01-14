@@ -11,6 +11,7 @@ import gleam/string
 import glexer.{Position}
 import gloat
 import gloat/env
+import gloat/type_error
 
 pub fn main() {
   case parse_args(start_arguments()) {
@@ -73,23 +74,30 @@ fn infer_source(src: String, path: String, lib_dirs: List(String)) {
           case load_imports(env_, imports, search_dirs, set.new()) {
             Error(message) -> io.println_error(message)
             Ok(#(env_loaded, _visited)) -> {
-              let env_final = gloat.add_module(env_loaded, parsed)
-              let inferred =
-                result.all(
-                  list.map(names, fn(name) {
-                    case env.resolve(env_final, name) {
-                      Ok(scheme) -> Ok(#(name, gloat.scheme_to_string(scheme)))
-                      Error(_) -> Error("Definition not found in env: " <> name)
-                    }
-                  }),
-                )
-              case inferred {
-                Ok(items) ->
-                  list.each(items, fn(item) {
-                    let #(name, scheme) = item
-                    io.println(name <> ": " <> scheme)
-                  })
-                Error(message) -> io.println_error(message)
+              case gloat.add_module(env_loaded, parsed) {
+                Error(err) ->
+                  io.println_error(format_type_error(path, src, err))
+                Ok(env_final) -> {
+                  let inferred =
+                    result.all(
+                      list.map(names, fn(name) {
+                        case env.resolve(env_final, name) {
+                          Ok(scheme) ->
+                            Ok(#(name, gloat.scheme_to_string(scheme)))
+                          Error(_) ->
+                            Error("Definition not found in env: " <> name)
+                        }
+                      }),
+                    )
+                  case inferred {
+                    Ok(items) ->
+                      list.each(items, fn(item) {
+                        let #(name, scheme) = item
+                        io.println(name <> ": " <> scheme)
+                      })
+                    Error(message) -> io.println_error(message)
+                  }
+                }
               }
             }
           }
@@ -166,11 +174,18 @@ fn load_module(
               load_imports(tenv, imports, search_dirs, visited),
               fn(loaded) {
                 let #(env_loaded, visited_loaded) = loaded
-                let module_env = gloat.add_module(env_loaded, parsed)
-                result.map(
-                  module_exports_env(module_name, module_env, parsed),
-                  fn(exports) {
-                    #(env.merge(env_loaded, exports), visited_loaded)
+                result.try(
+                  result.map_error(
+                    gloat.add_module(env_loaded, parsed),
+                    fn(err) { format_type_error(path, src, err) },
+                  ),
+                  fn(module_env) {
+                    result.map(
+                      module_exports_env(module_name, module_env, parsed),
+                      fn(exports) {
+                        #(env.merge(env_loaded, exports), visited_loaded)
+                      },
+                    )
                   },
                 )
               },
@@ -397,6 +412,19 @@ fn format_parse_error(
       )
     }
   }
+}
+
+fn format_type_error(
+  path: String,
+  source: String,
+  err: type_error.TypeError,
+) -> String {
+  format_span_message(
+    "Type error: " <> type_error.message(err),
+    path,
+    source,
+    type_error.span(err),
+  )
 }
 
 fn format_span_message(

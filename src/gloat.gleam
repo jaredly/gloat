@@ -2,8 +2,9 @@ import glance as g
 import gloat/builtins
 import gloat/env
 import gloat/infer
+import gloat/infer_state as is
 import gloat/scheme
-import gloat/state
+import gloat/type_error
 import gloat/types
 
 pub type Expr =
@@ -24,16 +25,25 @@ pub type Scheme =
 pub type TEnv =
   env.TEnv
 
+pub type TypeError =
+  type_error.TypeError
+
 pub fn builtin_env() -> env.TEnv {
   builtins.builtin_env()
 }
 
-pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+pub fn add_module(
+  tenv: env.TEnv,
+  module: g.Module,
+) -> Result(env.TEnv, type_error.TypeError) {
   builtins.add_module(tenv, module)
 }
 
-pub fn infer_expr(tenv: env.TEnv, expr: g.Expression) -> types.Type {
-  state.run_empty(infer.infer_expr(tenv, expr))
+pub fn infer_expr(
+  tenv: env.TEnv,
+  expr: g.Expression,
+) -> Result(types.Type, type_error.TypeError) {
+  is.run_empty(infer.infer_expr(tenv, expr))
 }
 
 pub fn type_to_string(type_: types.Type) -> String {

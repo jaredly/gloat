@@ -1,16 +1,16 @@
 import glance as g
 import gleam/dict
-import gleam/int
 import gleam/list
 import gleam/option
+import gleam/result
 import gleam/set
 import gleam/string
 import gloat/env
 import gloat/gleam_types
 import gloat/infer
-import gloat/runtime
+import gloat/infer_state as is
 import gloat/scheme
-import gloat/state
+import gloat/type_error
 import gloat/types
 
 pub fn add_def(
@@ -20,36 +20,30 @@ pub fn add_def(
   expr: g.Expression,
   annotation: option.Option(g.Type),
   loc: g.Span,
-) -> env.TEnv {
-  let loc_int = gleam_types.loc_from_span(loc)
-  state.run_empty({
-    use self <- state.bind(infer.new_type_var(name, types.unknown_span))
+) -> Result(env.TEnv, type_error.TypeError) {
+  is.run_empty({
+    use self <- is.bind(infer.new_type_var(name, types.unknown_span))
     let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
-    use type_ <- state.bind(infer.infer_expr(bound_env, expr))
-    use _ignored_annotation <- state.bind(case annotation {
+    use type_ <- is.bind(infer.infer_expr(bound_env, expr))
+    use _ignored_annotation <- is.bind(case annotation {
       option.Some(type_expr) ->
         case gleam_types.type_(type_expr) {
           Ok(annot_type) -> infer.unify(type_, annot_type, loc)
-          Error(_) ->
-            runtime.fatal("Unsupported annotation " <> int.to_string(loc_int))
+          Error(_) -> is.error("Unsupported annotation", loc)
         }
-      option.None -> state.pure(Nil)
+      option.None -> is.ok(Nil)
     })
-    use self_applied <- state.bind(state.apply_with(types.type_apply, self))
-    use _ignored <- state.bind(infer.unify(self_applied, type_, loc))
-    use type_applied <- state.bind(state.apply_with(types.type_apply, type_))
-    state.pure(env.with_type(
-      env.empty(),
-      name,
-      env.generalize(tenv, type_applied),
-    ))
+    use self_applied <- is.bind(is.apply_with(types.type_apply, self))
+    use _ignored <- is.bind(infer.unify(self_applied, type_, loc))
+    use type_applied <- is.bind(is.apply_with(types.type_apply, type_))
+    is.ok(env.with_type(env.empty(), name, env.generalize(tenv, type_applied)))
   })
 }
 
 pub fn add_defs(
   tenv: env.TEnv,
   defns: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
-) -> env.TEnv {
+) -> Result(env.TEnv, type_error.TypeError) {
   let names =
     list.map(defns, fn(args) {
       let #(name, _, _, _, _) = args
@@ -66,9 +60,9 @@ pub fn add_defs(
       annotation
     })
 
-  state.run_empty({
-    use vbls <- state.bind(
-      state.map_list(defns, fn(args) {
+  is.run_empty({
+    use vbls <- is.bind(
+      is.map_list(defns, fn(args) {
         let #(name, _name_loc, _expr, _annotation, _loc) = args
         infer.new_type_var(name, types.unknown_span)
       }),
@@ -83,47 +77,43 @@ pub fn add_defs(
         },
       )
 
-    use types_ <- state.bind(
-      state.map_list(defns, fn(args) {
+    use types_ <- is.bind(
+      is.map_list(defns, fn(args) {
         let #(_, _, expr, _, _) = args
         infer.infer_expr(bound_env, expr)
       }),
     )
-    use _ignored_annotations <- state.bind(
-      state.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
+    use _ignored_annotations <- is.bind(
+      is.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
         let #(type_, #(annotation, loc)) = args
-        let loc_int = gleam_types.loc_from_span(loc)
         case annotation {
-          option.None -> state.pure(Nil)
+          option.None -> is.ok(Nil)
           option.Some(type_expr) ->
             case gleam_types.type_(type_expr) {
               Ok(annot_type) -> infer.unify(type_, annot_type, loc)
-              Error(_) ->
-                runtime.fatal(
-                  "Unsupported annotation " <> int.to_string(loc_int),
-                )
+              Error(_) -> is.error("Unsupported annotation", loc)
             }
         }
       }),
     )
-    use vbls_applied <- state.bind(
-      state.map_list(vbls, fn(v) { state.apply_with(types.type_apply, v) }),
+    use vbls_applied <- is.bind(
+      is.map_list(vbls, fn(v) { is.apply_with(types.type_apply, v) }),
     )
-    use _ignored <- state.bind(
-      state.each_list(list.zip(vbls_applied, list.zip(types_, locs)), fn(args) {
+    use _ignored <- is.bind(
+      is.each_list(list.zip(vbls_applied, list.zip(types_, locs)), fn(args) {
         let #(vbl, #(type_, loc)) = args
         infer.unify(vbl, type_, loc)
       }),
     )
-    use types_applied <- state.bind(
-      state.map_list(types_, fn(t) { state.apply_with(types.type_apply, t) }),
+    use types_applied <- is.bind(
+      is.map_list(types_, fn(t) { is.apply_with(types.type_apply, t) }),
     )
     let new_env =
       list.fold(list.zip(names, types_applied), env.empty(), fn(acc, args) {
         let #(name, type_) = args
         env.with_type(acc, name, env.generalize(tenv, type_))
       })
-    state.pure(new_env)
+    is.ok(new_env)
   })
 }
 
@@ -227,44 +217,68 @@ pub fn add_deftype(
   env.TEnv(values, tcons, types_map, dict.new(), dict.new())
 }
 
-pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+pub fn add_module(
+  tenv: env.TEnv,
+  module: g.Module,
+) -> Result(env.TEnv, type_error.TypeError) {
   let g.Module(_imports, custom_types, type_aliases, constants, functions) =
     module
-  let import_env = add_imports(tenv, module)
-  let tenv_with_imports = env.merge(tenv, import_env)
-  let alias_env =
-    list.fold(type_aliases, env.empty(), fn(acc, defn) {
-      env.merge(acc, add_typealias_def(tenv_with_imports, defn))
-    })
-  let tenv_with_aliases = env.merge(tenv_with_imports, alias_env)
-  let types_env =
-    list.fold(custom_types, env.empty(), fn(acc, defn) {
-      env.merge(acc, add_custom_type_def(tenv_with_aliases, defn))
-    })
-  let type_env = env.merge(alias_env, types_env)
-  let tenv_with_types = env.merge(tenv_with_imports, type_env)
-  let defs =
-    list.append(
-      list.map(constants, constant_to_def),
-      list.map(functions, function_to_def),
+  result.try(add_imports(tenv, module), fn(import_env) {
+    let tenv_with_imports = env.merge(tenv, import_env)
+    result.try(
+      fold_defs(type_aliases, env.empty(), fn(acc, defn) {
+        result.map(add_typealias_def(tenv_with_imports, defn), fn(env_) {
+          env.merge(acc, env_)
+        })
+      }),
+      fn(alias_env) {
+        let tenv_with_aliases = env.merge(tenv_with_imports, alias_env)
+        result.try(
+          fold_defs(custom_types, env.empty(), fn(acc, defn) {
+            result.map(add_custom_type_def(tenv_with_aliases, defn), fn(env_) {
+              env.merge(acc, env_)
+            })
+          }),
+          fn(types_env) {
+            let type_env = env.merge(alias_env, types_env)
+            let tenv_with_types = env.merge(tenv_with_imports, type_env)
+            result.try(
+              result.map(
+                result.all(list.map(functions, function_to_def)),
+                fn(fn_defs) {
+                  list.append(list.map(constants, constant_to_def), fn_defs)
+                },
+              ),
+              fn(defs) {
+                result.map(
+                  add_defs_grouped(tenv_with_types, defs),
+                  fn(defs_env) { env.merge(tenv_with_types, defs_env) },
+                )
+              },
+            )
+          },
+        )
+      },
     )
-  let defs_env = add_defs_grouped(tenv_with_types, defs)
-  env.merge(tenv_with_types, defs_env)
+  })
 }
 
-fn add_imports(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+fn add_imports(
+  tenv: env.TEnv,
+  module: g.Module,
+) -> Result(env.TEnv, type_error.TypeError) {
   let g.Module(imports, _custom_types, _type_aliases, _constants, _functions) =
     module
-  list.fold(imports, env.empty(), fn(acc, defn) {
+  fold_defs(imports, env.empty(), fn(acc, defn) {
     let g.Definition(_attrs, import_) = defn
-    let g.Import(_loc, module_name, alias, _types, values) = import_
+    let g.Import(span, module_name, alias, _types, values) = import_
     let base = module_key(module_name)
     let acc_with_module = case alias {
       option.None -> env.with_module(acc, base, base)
       option.Some(g.Named(name)) -> env.with_module(acc, name, base)
       option.Some(g.Discarded(_)) -> acc
     }
-    list.fold(values, acc_with_module, fn(acc2, value) {
+    fold_defs(values, acc_with_module, fn(acc2, value) {
       let g.UnqualifiedImport(name, alias) = value
       let target = case alias {
         option.None -> name
@@ -272,11 +286,24 @@ fn add_imports(tenv: env.TEnv, module: g.Module) -> env.TEnv {
       }
       let qualified = base <> "/" <> name
       case env.resolve(tenv, qualified) {
-        Ok(scheme_) -> env.with_type(acc2, target, scheme_)
-        Error(_) -> runtime.fatal("Unknown import value " <> qualified)
+        Ok(scheme_) -> Ok(env.with_type(acc2, target, scheme_))
+        Error(_) ->
+          Error(type_error.new("Unknown import value " <> qualified, span))
       }
     })
   })
+}
+
+fn fold_defs(
+  defs: List(a),
+  init: b,
+  f: fn(b, a) -> Result(b, type_error.TypeError),
+) -> Result(b, type_error.TypeError) {
+  case defs {
+    [] -> Ok(init)
+    [one, ..rest] ->
+      result.try(f(init, one), fn(next) { fold_defs(rest, next, f) })
+  }
 }
 
 fn module_key(module_name: String) -> String {
@@ -290,14 +317,16 @@ fn module_key(module_name: String) -> String {
 fn add_defs_grouped(
   tenv: env.TEnv,
   defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
-) -> env.TEnv {
+) -> Result(env.TEnv, type_error.TypeError) {
   case defs {
-    [] -> env.empty()
+    [] -> Ok(env.empty())
     _ -> {
       let def_groups = group_mutual_defs(defs)
-      list.fold(def_groups, env.empty(), fn(acc, group) {
+      fold_defs(def_groups, env.empty(), fn(acc, group) {
         let merged = env.merge(tenv, acc)
-        env.merge(acc, add_defs(merged, group))
+        result.map(add_defs(merged, group), fn(group_env) {
+          env.merge(acc, group_env)
+        })
       })
     }
   }
@@ -306,41 +335,38 @@ fn add_defs_grouped(
 fn add_typealias_def(
   tenv: env.TEnv,
   defn: g.Definition(g.TypeAlias),
-) -> env.TEnv {
+) -> Result(env.TEnv, type_error.TypeError) {
   let g.Definition(_attrs, type_alias) = defn
   let g.TypeAlias(span, name, _publicity, parameters, aliased) = type_alias
-  let loc_int = gleam_types.loc_from_span(span)
   let args = list.map(parameters, fn(param) { #(param, span) })
-  let type_ = case gleam_types.type_(aliased) {
-    Ok(type_) -> type_
-    Error(_) ->
-      runtime.fatal("Unsupported alias type " <> int.to_string(loc_int))
+  case gleam_types.type_(aliased) {
+    Ok(type_) -> Ok(add_typealias(tenv, name, args, type_))
+    Error(_) -> Error(type_error.new("Unsupported alias type", span))
   }
-  add_typealias(tenv, name, args, type_)
 }
 
 fn add_custom_type_def(
   tenv: env.TEnv,
   defn: g.Definition(g.CustomType),
-) -> env.TEnv {
+) -> Result(env.TEnv, type_error.TypeError) {
   let g.Definition(_attrs, custom_type) = defn
   let g.CustomType(span, name, _publicity, _opaque, parameters, variants) =
     custom_type
-  let loc_int = gleam_types.loc_from_span(span)
   let args = list.map(parameters, fn(param) { #(param, span) })
-  let constrs =
-    list.map(variants, fn(variant) {
-      let g.Variant(cname, fields, _attributes) = variant
-      let field_types = case gleam_types.variant_fields(fields) {
-        Ok(field_types) -> field_types
-        Error(_) ->
-          runtime.fatal(
-            "Unsupported constructor fields " <> int.to_string(loc_int),
-          )
-      }
-      #(cname, span, field_types, span)
-    })
-  add_deftype(tenv, name, args, constrs, span)
+  result.try(
+    result.all(
+      list.map(variants, fn(variant) {
+        let g.Variant(cname, fields, _attributes) = variant
+        result.map(
+          result.map_error(gleam_types.variant_fields(fields), fn(_) {
+            type_error.new("Unsupported constructor fields", span)
+          }),
+          fn(field_types) { #(cname, span, field_types, span) },
+        )
+      }),
+    ),
+    fn(constrs) { Ok(add_deftype(tenv, name, args, constrs, span)) },
+  )
 }
 
 fn constant_to_def(
@@ -353,13 +379,26 @@ fn constant_to_def(
 
 fn function_to_def(
   defn: g.Definition(g.Function),
-) -> #(String, g.Span, g.Expression, option.Option(g.Type), g.Span) {
+) -> Result(
+  #(String, g.Span, g.Expression, option.Option(g.Type), g.Span),
+  type_error.TypeError,
+) {
   let g.Definition(attrs, function) = defn
   let g.Function(span, name, _publicity, parameters, return, body) = function
   case is_external(attrs) && body == [] {
     True -> {
-      let annotation = external_function_type(span, parameters, return)
-      #(name, span, g.Todo(span, option.None), option.Some(annotation), span)
+      result.map(
+        external_function_type(span, parameters, return),
+        fn(annotation) {
+          #(
+            name,
+            span,
+            g.Todo(span, option.None),
+            option.Some(annotation),
+            span,
+          )
+        },
+      )
     }
     False -> {
       let fn_params =
@@ -368,7 +407,7 @@ fn function_to_def(
           g.FnParameter(name, type_)
         })
       let expr = g.Fn(span, fn_params, return, body)
-      #(name, span, expr, option.None, span)
+      Ok(#(name, span, expr, option.None, span))
     }
   }
 }
@@ -384,27 +423,26 @@ fn external_function_type(
   span: g.Span,
   parameters: List(g.FunctionParameter),
   return: option.Option(g.Type),
-) -> g.Type {
-  let loc = gleam_types.loc_from_span(span)
+) -> Result(g.Type, type_error.TypeError) {
   let args =
-    list.map(parameters, fn(param) {
-      let g.FunctionParameter(_label, _name, type_) = param
-      case type_ {
-        option.Some(type_) -> type_
-        option.None ->
-          runtime.fatal(
-            "External function missing annotation " <> int.to_string(loc),
-          )
-      }
-    })
-  let return_type = case return {
-    option.Some(type_) -> type_
-    option.None ->
-      runtime.fatal(
-        "External function missing return type " <> int.to_string(loc),
-      )
-  }
-  g.FunctionType(span, args, return_type)
+    result.all(
+      list.map(parameters, fn(param) {
+        let g.FunctionParameter(_label, _name, type_) = param
+        case type_ {
+          option.Some(type_) -> Ok(type_)
+          option.None ->
+            Error(type_error.new("External function missing annotation", span))
+        }
+      }),
+    )
+  result.try(args, fn(arg_types) {
+    let return_type = case return {
+      option.Some(type_) -> Ok(type_)
+      option.None ->
+        Error(type_error.new("External function missing return type", span))
+    }
+    result.map(return_type, fn(ret) { g.FunctionType(span, arg_types, ret) })
+  })
 }
 
 type DefInfo =

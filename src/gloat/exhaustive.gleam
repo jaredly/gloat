@@ -6,9 +6,7 @@ import gleam/list
 import gleam/option
 import gleam/set
 import gloat/env
-import gloat/gleam_types
-import gloat/runtime
-import gloat/state
+import gloat/infer_state as is
 import gloat/types
 
 pub type ExPattern {
@@ -22,99 +20,110 @@ pub fn check_exhaustiveness(
   target_type: types.Type,
   patterns: List(g.Pattern),
   span: g.Span,
-) -> state.State(Nil) {
-  let loc = gleam_types.loc_from_span(span)
-  use applied_target <- state.bind(type_apply_state(target_type))
-  let matrix =
-    list.map(patterns, fn(pat) {
-      [pattern_to_ex_pattern(tenv, #(pat, applied_target))]
-    })
+) -> is.InferState(Nil) {
+  use applied_target <- is.bind(type_apply_state(target_type))
+  use matrix <- is.bind(
+    is.map_list(patterns, fn(pat) {
+      use ex <- is.bind(pattern_to_ex_pattern(tenv, #(pat, applied_target)))
+      is.ok([ex])
+    }),
+  )
 
   case is_exhaustive(tenv, matrix) {
-    True -> state.pure(Nil)
-    False -> runtime.fatal("Match not exhaustive " <> int.to_string(loc))
+    True -> is.ok(Nil)
+    False -> is.error("Match not exhaustive", span)
   }
 }
 
 pub fn pattern_to_ex_pattern(
   tenv: env.TEnv,
   pat_and_type: #(g.Pattern, types.Type),
-) -> ExPattern {
+) -> is.InferState(ExPattern) {
   let #(pattern, type_) = pat_and_type
   case pattern {
-    g.PatternVariable(_, _) -> ExAny
-    g.PatternDiscard(_, _) -> ExAny
-    g.PatternString(_, str) -> ExConstructor(str, "String", [])
-    g.PatternInt(_, value) ->
+    g.PatternVariable(_, _) -> is.ok(ExAny)
+    g.PatternDiscard(_, _) -> is.ok(ExAny)
+    g.PatternString(_, str) -> is.ok(ExConstructor(str, "String", []))
+    g.PatternInt(span, value) ->
       case int.parse(value) {
-        Ok(v) -> ExConstructor(int.to_string(v), "Int", [])
-        Error(_) -> runtime.fatal("Invalid int pattern")
+        Ok(v) -> is.ok(ExConstructor(int.to_string(v), "Int", []))
+        Error(_) -> is.error("Invalid int pattern", span)
       }
-    g.PatternFloat(_, value) ->
+    g.PatternFloat(span, value) ->
       case float.parse(value) {
-        Ok(v) -> ExConstructor(float.to_string(v), "Float", [])
-        Error(_) -> runtime.fatal("Invalid float pattern")
+        Ok(v) -> is.ok(ExConstructor(float.to_string(v), "Float", []))
+        Error(_) -> is.error("Invalid float pattern", span)
       }
     g.PatternAssignment(_span, pat, _name) ->
       pattern_to_ex_pattern(tenv, #(pat, type_))
-    g.PatternConcatenate(_, _prefix, _prefix_name, _rest_name) -> ExAny
-    g.PatternList(_, items, tail) ->
+    g.PatternConcatenate(_, _prefix, _prefix_name, _rest_name) -> is.ok(ExAny)
+    g.PatternList(span, items, tail) ->
       case type_ {
         types.Tapp(types.Tcon("List", _), [elem_type], _) -> {
-          let base = case tail {
-            option.None -> ExConstructor("[]", "List", [])
+          use base <- is.bind(case tail {
+            option.None -> is.ok(ExConstructor("[]", "List", []))
             option.Some(pat) -> pattern_to_ex_pattern(tenv, #(pat, type_))
-          }
-          list.fold_right(items, base, fn(acc, item) {
-            let head = pattern_to_ex_pattern(tenv, #(item, elem_type))
-            ExConstructor("::", "List", [head, acc])
+          })
+          is.foldr_list(items, base, fn(acc, item) {
+            use head <- is.bind(pattern_to_ex_pattern(tenv, #(item, elem_type)))
+            is.ok(ExConstructor("::", "List", [head, acc]))
           })
         }
-        _ -> runtime.fatal("List pattern with non-list type")
+        _ -> is.error("List pattern with non-list type", span)
       }
     g.PatternBitString(_, _segments) ->
-      ExConstructor("bitstring", "BitString", [])
-    g.PatternTuple(_span, items) ->
+      is.ok(ExConstructor("bitstring", "BitString", []))
+    g.PatternTuple(span, items) ->
       case type_ {
         types.Ttuple(targs, _) ->
           case list.length(items) == list.length(targs) {
             True ->
-              ExConstructor(
-                ",",
-                "tuple",
-                list.map(list.zip(items, targs), fn(pair) {
+              is.map(
+                is.map_list(list.zip(items, targs), fn(pair) {
                   let #(pat, t) = pair
                   pattern_to_ex_pattern(tenv, #(pat, t))
                 }),
+                fn(pats) { ExConstructor(",", "tuple", pats) },
               )
-            False -> runtime.fatal("Tuple arity mismatch")
+            False -> is.error("Tuple arity mismatch", span)
           }
-        _ -> runtime.fatal("Tuple pattern with non-tuple type")
+        _ -> is.error("Tuple pattern with non-tuple type", span)
       }
     g.PatternVariant(span, _module, name, arguments, with_spread) -> {
-      let #(tname, targs) = types.tcon_and_args(type_, [], span)
+      use tcon <- is.bind(is.from_result(types.tcon_and_args(type_, [], span)))
+      let #(tname, targs) = tcon
       let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
 
-      let #(free_names, cargs, _cres) = case dict.get(tcons, name) {
-        Error(_) -> runtime.fatal("Unknown type constructor " <> name)
-        Ok(value) -> value
+      case dict.get(tcons, name) {
+        Error(_) -> is.error("Unknown type constructor " <> name, span)
+        Ok(value) -> {
+          let #(free_names, cargs, _cres) = value
+          let subst = dict.from_list(list.zip(free_names, targs))
+          let fields = list.map(arguments, fn(field) { pattern_field(field) })
+          use aligned <- is.bind(align_constructor_fields(
+            fields,
+            cargs,
+            span,
+            with_spread,
+          ))
+          use converted_args <- is.bind(
+            is.map_list(list.zip(aligned, cargs), fn(pair) {
+              let #(maybe_pat, cfield) = pair
+              let #(_label, ctype) = cfield
+              case maybe_pat {
+                option.None -> is.ok(ExAny)
+                option.Some(pat) ->
+                  pattern_to_ex_pattern(tenv, #(
+                    pat,
+                    types.type_apply(subst, ctype),
+                  ))
+              }
+            }),
+          )
+
+          is.ok(ExConstructor(name, tname, converted_args))
+        }
       }
-
-      let subst = dict.from_list(list.zip(free_names, targs))
-      let fields = list.map(arguments, fn(field) { pattern_field(field) })
-      let aligned = align_constructor_fields(fields, cargs, span, with_spread)
-      let converted_args =
-        list.map(list.zip(aligned, cargs), fn(pair) {
-          let #(maybe_pat, cfield) = pair
-          let #(_label, ctype) = cfield
-          case maybe_pat {
-            option.None -> ExAny
-            option.Some(pat) ->
-              pattern_to_ex_pattern(tenv, #(pat, types.type_apply(subst, ctype)))
-          }
-        })
-
-      ExConstructor(name, tname, converted_args)
     }
   }
 }
@@ -137,8 +146,7 @@ fn align_constructor_fields(
   cfields: List(#(option.Option(String), types.Type)),
   span: g.Span,
   allow_missing: Bool,
-) -> List(option.Option(g.Pattern)) {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(List(option.Option(g.Pattern))) {
   let indexed = index_list(cfields)
   let labels =
     list.filter_map(indexed, fn(entry) {
@@ -155,8 +163,8 @@ fn align_constructor_fields(
       idx
     })
 
-  let #(assigned, remaining) =
-    list.fold(fields, #(dict.new(), unused), fn(acc, field) {
+  use folded <- is.bind(
+    is.foldl_list(fields, #(dict.new(), unused), fn(acc, field) {
       let #(assigned, unused_inner) = acc
       let #(label, pat) = field
       case label {
@@ -164,46 +172,43 @@ fn align_constructor_fields(
           case dict.get(labels_dict, name) {
             Ok(idx) ->
               case list.contains(unused_inner, idx) {
-                True -> #(
-                  dict.insert(assigned, idx, pat),
-                  list.filter(unused_inner, fn(i) { i != idx }),
-                )
-                False ->
-                  runtime.fatal(
-                    "Duplicate field " <> name <> " " <> int.to_string(loc),
-                  )
+                True ->
+                  is.ok(#(
+                    dict.insert(assigned, idx, pat),
+                    list.filter(unused_inner, fn(i) { i != idx }),
+                  ))
+                False -> is.error("Duplicate field " <> name, span)
               }
-            Error(_) ->
-              runtime.fatal(
-                "Unknown field " <> name <> " " <> int.to_string(loc),
-              )
+            Error(_) -> is.error("Unknown field " <> name, span)
           }
         option.None ->
           case unused_inner {
-            [] ->
-              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
-            [first, ..rest] -> #(dict.insert(assigned, first, pat), rest)
+            [] -> is.error("Constructor field mismatch", span)
+            [first, ..rest] -> is.ok(#(dict.insert(assigned, first, pat), rest))
           }
       }
-    })
+    }),
+  )
+  let #(assigned, remaining) = folded
 
-  case remaining {
-    [] -> Nil
+  use _ignored_remaining <- is.bind(case remaining {
+    [] -> is.ok(Nil)
     _ ->
       case allow_missing {
-        True -> Nil
-        False ->
-          runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+        True -> is.ok(Nil)
+        False -> is.error("Constructor field mismatch", span)
       }
-  }
-
-  list.map(indexed, fn(entry) {
-    let #(idx, _field) = entry
-    case dict.get(assigned, idx) {
-      Ok(pat) -> option.Some(pat)
-      Error(_) -> option.None
-    }
   })
+
+  is.ok(
+    list.map(indexed, fn(entry) {
+      let #(idx, _field) = entry
+      case dict.get(assigned, idx) {
+        Ok(pat) -> option.Some(pat)
+        Error(_) -> option.None
+      }
+    }),
+  )
 }
 
 fn index_list(items: List(a)) -> List(#(Int, a)) {
@@ -255,7 +260,7 @@ fn specialize_row(
   row: List(ExPattern),
 ) -> List(List(ExPattern)) {
   case row {
-    [] -> runtime.fatal("Can't specialize an empty row.")
+    [] -> []
     [ExAny, ..rest] -> [list.append(any_list(arity), rest)]
     [ExConstructor(name, _, args), ..rest] ->
       case name == constructor {
@@ -286,10 +291,7 @@ fn find_gid(heads: List(ExPattern)) -> Result(String, Nil) {
           Error(_) -> Ok(id)
           Ok(existing) ->
             case existing != id {
-              True ->
-                runtime.fatal(
-                  "Constructors with different group IDs in the same position.",
-                )
+              True -> Error(Nil)
               False -> Ok(id)
             }
         }
@@ -310,7 +312,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
     _ -> {
       let env.TEnv(_values, _tcons, types, _aliases, _modules) = tenv
       case dict.get(types, gid) {
-        Error(_) -> runtime.fatal("Unknown type name " <> gid)
+        Error(_) -> []
         Ok(#(_arity, names)) -> set.to_list(names)
       }
     }
@@ -324,7 +326,7 @@ fn args_if_complete(
   let heads =
     list.map(matrix, fn(row) {
       case row {
-        [] -> runtime.fatal("is_complete called with empty row")
+        [] -> ExAny
         [head, ..] -> head
       }
     })
@@ -406,6 +408,6 @@ fn is_useful(
   }
 }
 
-fn type_apply_state(type_: types.Type) -> state.State(types.Type) {
-  state.apply_with(types.type_apply, type_)
+fn type_apply_state(type_: types.Type) -> is.InferState(types.Type) {
+  is.apply_with(types.type_apply, type_)
 }

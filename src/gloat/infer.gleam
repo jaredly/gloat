@@ -5,144 +5,129 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
-import gleam/string
 import gloat/env
 import gloat/exhaustive
 import gloat/gleam_types
-import gloat/runtime
+import gloat/infer_state as is
 import gloat/scheme
 import gloat/state
 import gloat/types
 
-pub fn infer_expr(tenv: env.TEnv, expr: g.Expression) -> state.State(types.Type) {
-  use old_subst <- state.bind(state.reset_subst(dict.new()))
-  use type_ <- state.bind(infer_expr_inner(tenv, expr))
-  use new_subst <- state.bind(state.reset_subst(old_subst))
-  use _ignored <- state.bind(state.put_subst(new_subst))
-  state.pure(type_)
+pub fn infer_expr(
+  tenv: env.TEnv,
+  expr: g.Expression,
+) -> is.InferState(types.Type) {
+  use old_subst <- is.bind(reset_subst_state(dict.new()))
+  use type_ <- is.bind(infer_expr_inner(tenv, expr))
+  use new_subst <- is.bind(reset_subst_state(old_subst))
+  use _ignored <- is.bind(put_subst_state(new_subst))
+  is.ok(type_)
 }
 
 fn infer_expr_inner(
   tenv: env.TEnv,
   expr: g.Expression,
-) -> state.State(types.Type) {
+) -> is.InferState(types.Type) {
   case expr {
     g.Int(span, value) ->
       case int.parse(value) {
-        Ok(_) -> state.pure(types.Tcon("Int", span))
-        Error(_) ->
-          runtime.fatal(
-            "Invalid int literal "
-            <> int.to_string(gleam_types.loc_from_span(span)),
-          )
+        Ok(_) -> is.ok(types.Tcon("Int", span))
+        Error(_) -> is.error("Invalid int literal", span)
       }
 
     g.Float(span, value) ->
       case float.parse(value) {
-        Ok(_) -> state.pure(types.Tcon("Float", span))
-        Error(_) ->
-          runtime.fatal(
-            "Invalid float literal "
-            <> int.to_string(gleam_types.loc_from_span(span)),
-          )
+        Ok(_) -> is.ok(types.Tcon("Float", span))
+        Error(_) -> is.error("Invalid float literal", span)
       }
 
-    g.String(span, _value) -> state.pure(types.Tcon("String", span))
+    g.String(span, _value) -> is.ok(types.Tcon("String", span))
 
     g.Variable(span, name) ->
       case env.resolve(tenv, name) {
         Ok(scheme_) -> instantiate(scheme_, span)
-        Error(_) -> runtime.fatal("Variable not found in scope: " <> name)
+        Error(_) -> is.error("Variable not found in scope: " <> name, span)
       }
 
     g.NegateInt(span, value) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use value_type <- state.bind(infer_expr(tenv, value))
-      use _ignored <- state.bind(unify(
-        value_type,
-        types.Tcon("Int", span),
-        span,
-      ))
-      state.pure(types.Tcon("Int", span))
+      use value_type <- is.bind(infer_expr(tenv, value))
+      use _ignored <- is.bind(unify(value_type, types.Tcon("Int", span), span))
+      is.ok(types.Tcon("Int", span))
     }
 
     g.NegateBool(span, value) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use value_type <- state.bind(infer_expr(tenv, value))
-      use _ignored <- state.bind(unify(
-        value_type,
-        types.Tcon("Bool", span),
-        span,
-      ))
-      state.pure(types.Tcon("Bool", span))
+      use value_type <- is.bind(infer_expr(tenv, value))
+      use _ignored <- is.bind(unify(value_type, types.Tcon("Bool", span), span))
+      is.ok(types.Tcon("Bool", span))
     }
 
     g.Block(span, statements) -> infer_block(tenv, statements, span)
 
     g.Panic(span, message) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- state.bind(case message {
+      use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- state.bind(infer_expr(tenv, expr))
+          use msg_type <- is.bind(infer_expr(tenv, expr))
           unify(msg_type, types.Tcon("String", span), span)
         }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
       new_type_var("panic", span)
     }
 
     g.Todo(span, message) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- state.bind(case message {
+      use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- state.bind(infer_expr(tenv, expr))
+          use msg_type <- is.bind(infer_expr(tenv, expr))
           unify(msg_type, types.Tcon("String", span), span)
         }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
       new_type_var("todo", span)
     }
 
     g.Tuple(span, items) -> {
-      use item_types <- state.bind(
-        state.map_list(items, fn(item) { infer_expr(tenv, item) }),
+      use item_types <- is.bind(
+        is.map_list(items, fn(item) { infer_expr(tenv, item) }),
       )
-      state.pure(types.Ttuple(item_types, span))
+      is.ok(types.Ttuple(item_types, span))
     }
 
     g.TupleIndex(span, target, index) -> {
-      let loc = gleam_types.loc_from_span(span)
-      use target_type <- state.bind(infer_expr(tenv, target))
-      use applied_target <- state.bind(type_apply_state(target_type))
+      use target_type <- is.bind(infer_expr(tenv, target))
+      use applied_target <- is.bind(type_apply_state(target_type))
       case applied_target {
         types.Ttuple(args, _) -> tuple_index_type(args, index, span)
         types.Tvar(_, _) -> {
-          use args <- state.bind(tuple_index_vars(index + 1, span))
+          use args <- is.bind(tuple_index_vars(index + 1, span))
           let tuple_type = types.Ttuple(args, span)
-          use _ignored <- state.bind(unify(applied_target, tuple_type, span))
+          use _ignored <- is.bind(unify(applied_target, tuple_type, span))
           tuple_index_type(args, index, span)
         }
-        _ -> runtime.fatal("Tuple index on non-tuple " <> int.to_string(loc))
+        _ -> is.error("Tuple index on non-tuple", span)
       }
     }
 
     g.List(span, items, tail) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use elem_type <- state.bind(new_type_var("list_item", span))
+      use elem_type <- is.bind(new_type_var("list_item", span))
       let list_type = types.Tapp(types.Tcon("List", span), [elem_type], span)
-      use item_types <- state.bind(
-        state.map_list(items, fn(item) { infer_expr(tenv, item) }),
+      use item_types <- is.bind(
+        is.map_list(items, fn(item) { infer_expr(tenv, item) }),
       )
-      use _ignored <- state.bind(
-        state.each_list(item_types, fn(item_type) {
+      use _ignored <- is.bind(
+        is.each_list(item_types, fn(item_type) {
           unify(item_type, elem_type, span)
         }),
       )
       case tail {
         option.None -> type_apply_state(list_type)
         option.Some(tail_expr) -> {
-          use tail_type <- state.bind(infer_expr(tenv, tail_expr))
-          use _ignored <- state.bind(unify(tail_type, list_type, span))
+          use tail_type <- is.bind(infer_expr(tenv, tail_expr))
+          use _ignored <- is.bind(unify(tail_type, list_type, span))
           type_apply_state(list_type)
         }
       }
@@ -150,55 +135,52 @@ fn infer_expr_inner(
 
     g.BitString(span, segments) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- state.bind(
-        state.each_list(segments, fn(segment) {
+      use _ignored <- is.bind(
+        is.each_list(segments, fn(segment) {
           let #(expr, _opts) = segment
-          use _ignored2 <- state.bind(infer_expr(tenv, expr))
-          use _ignored3 <- state.bind(infer_bitstring_expr_options(
-            tenv,
-            segment,
-          ))
-          state.pure(Nil)
+          use _ignored2 <- is.bind(infer_expr(tenv, expr))
+          use _ignored3 <- is.bind(infer_bitstring_expr_options(tenv, segment))
+          is.ok(Nil)
         }),
       )
-      state.pure(types.Tcon("BitString", span))
+      is.ok(types.Tcon("BitString", span))
     }
 
     g.Echo(span, value, message) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- state.bind(case message {
+      use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- state.bind(infer_expr(tenv, expr))
-          use _ignored2 <- state.bind(unify(
+          use msg_type <- is.bind(infer_expr(tenv, expr))
+          use _ignored2 <- is.bind(unify(
             msg_type,
             types.Tcon("String", span),
             span,
           ))
-          state.pure(Nil)
+          is.ok(Nil)
         }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
       case value {
         option.Some(expr) -> infer_expr(tenv, expr)
-        option.None -> state.pure(types.Tcon("()", span))
+        option.None -> is.ok(types.Tcon("()", span))
       }
     }
 
     g.RecordUpdate(span, _module, name, record, fields) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use args2 <- state.bind(instantiate_tcon(tenv, name, span))
+      use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
-      use record_type <- state.bind(infer_expr(tenv, record))
-      use _ignored <- state.bind(unify(record_type, cres, span))
-      use _ignored2 <- state.bind(
-        state.each_list(fields, fn(field) {
+      use record_type <- is.bind(infer_expr(tenv, record))
+      use _ignored <- is.bind(unify(record_type, cres, span))
+      use _ignored2 <- is.bind(
+        is.each_list(fields, fn(field) {
           let g.RecordUpdateField(label, item) = field
-          let ctype = lookup_constructor_field(label, cfields, span)
+          use ctype <- is.bind(lookup_constructor_field(label, cfields, span))
           let expr = case item {
             option.Some(expr) -> expr
             option.None -> g.Variable(span, label)
           }
-          use expr_type <- state.bind(infer_expr(tenv, expr))
+          use expr_type <- is.bind(infer_expr(tenv, expr))
           unify(expr_type, ctype, span)
         }),
       )
@@ -206,7 +188,6 @@ fn infer_expr_inner(
     }
 
     g.FieldAccess(span, container, label) -> {
-      let loc = gleam_types.loc_from_span(span)
       case container {
         g.Variable(_span, module_name) ->
           case env.resolve_module(tenv, module_name) {
@@ -214,90 +195,101 @@ fn infer_expr_inner(
               case env.resolve(tenv, module_key <> "/" <> label) {
                 Ok(scheme_) -> instantiate(scheme_, span)
                 Error(_) ->
-                  runtime.fatal(
+                  is.error(
                     "Unknown module value " <> module_key <> "/" <> label,
+                    span,
                   )
               }
             Error(_) -> {
-              use target_type <- state.bind(infer_expr(tenv, container))
-              use applied_target <- state.bind(type_apply_state(target_type))
+              use target_type <- is.bind(infer_expr(tenv, container))
+              use applied_target <- is.bind(type_apply_state(target_type))
               case applied_target {
                 types.Tvar(_, _) ->
-                  runtime.fatal(
-                    "Record field access requires known type "
-                    <> int.to_string(loc),
-                  )
+                  is.error("Record field access requires known type", span)
                 _ -> {
-                  let #(tname, targs) =
-                    types.tcon_and_args(applied_target, [], span)
+                  use tcon <- is.bind(
+                    is.from_result(types.tcon_and_args(applied_target, [], span)),
+                  )
+                  let #(tname, targs) = tcon
                   let env.TEnv(_values, tcons, types_map, _aliases, _modules) =
                     tenv
-                  let constructors = case dict.get(types_map, tname) {
-                    Ok(#(_arity, names)) -> set.to_list(names)
-                    Error(_) -> runtime.fatal("Unknown type name " <> tname)
-                  }
-                  case constructors {
-                    [cname] -> {
-                      let #(free, cfields, _cres) = case
-                        dict.get(tcons, cname)
-                      {
-                        Ok(value) -> value
-                        Error(_) ->
-                          runtime.fatal("Unknown constructor " <> cname)
+                  case dict.get(types_map, tname) {
+                    Error(_) -> is.error("Unknown type name " <> tname, span)
+                    Ok(#(_arity, names)) -> {
+                      let constructors = set.to_list(names)
+                      case constructors {
+                        [cname] -> {
+                          case dict.get(tcons, cname) {
+                            Ok(value) -> {
+                              let #(free, cfields, _cres) = value
+                              let subst = dict.from_list(list.zip(free, targs))
+                              use ctype <- is.bind(lookup_constructor_field(
+                                label,
+                                cfields,
+                                span,
+                              ))
+                              let field_type = types.type_apply(subst, ctype)
+                              is.ok(field_type)
+                            }
+                            Error(_) ->
+                              is.error("Unknown constructor " <> cname, span)
+                          }
+                        }
+                        _ ->
+                          is.error(
+                            "Record field access requires single-constructor type "
+                              <> tname,
+                            span,
+                          )
                       }
-                      let subst = dict.from_list(list.zip(free, targs))
-                      let field_type =
-                        types.type_apply(
-                          subst,
-                          lookup_constructor_field(label, cfields, span),
-                        )
-                      state.pure(field_type)
                     }
-                    _ ->
-                      runtime.fatal(
-                        "Record field access requires single-constructor type "
-                        <> tname,
-                      )
                   }
                 }
               }
             }
           }
         _ -> {
-          use target_type <- state.bind(infer_expr(tenv, container))
-          use applied_target <- state.bind(type_apply_state(target_type))
+          use target_type <- is.bind(infer_expr(tenv, container))
+          use applied_target <- is.bind(type_apply_state(target_type))
           case applied_target {
             types.Tvar(_, _) ->
-              runtime.fatal(
-                "Record field access requires known type " <> int.to_string(loc),
-              )
+              is.error("Record field access requires known type", span)
             _ -> {
-              let #(tname, targs) =
-                types.tcon_and_args(applied_target, [], span)
+              use tcon <- is.bind(
+                is.from_result(types.tcon_and_args(applied_target, [], span)),
+              )
+              let #(tname, targs) = tcon
               let env.TEnv(_values, tcons, types_map, _aliases, _modules) = tenv
-              let constructors = case dict.get(types_map, tname) {
-                Ok(#(_arity, names)) -> set.to_list(names)
-                Error(_) -> runtime.fatal("Unknown type name " <> tname)
-              }
-              case constructors {
-                [cname] -> {
-                  let #(free, cfields, _cres) = case dict.get(tcons, cname) {
-                    Ok(value) -> value
-                    Error(_) -> runtime.fatal("Unknown constructor " <> cname)
+              case dict.get(types_map, tname) {
+                Error(_) -> is.error("Unknown type name " <> tname, span)
+                Ok(#(_arity, names)) -> {
+                  let constructors = set.to_list(names)
+                  case constructors {
+                    [cname] -> {
+                      case dict.get(tcons, cname) {
+                        Ok(value) -> {
+                          let #(free, cfields, _cres) = value
+                          let subst = dict.from_list(list.zip(free, targs))
+                          use ctype <- is.bind(lookup_constructor_field(
+                            label,
+                            cfields,
+                            span,
+                          ))
+                          let field_type = types.type_apply(subst, ctype)
+                          is.ok(field_type)
+                        }
+                        Error(_) ->
+                          is.error("Unknown constructor " <> cname, span)
+                      }
+                    }
+                    _ ->
+                      is.error(
+                        "Record field access requires single-constructor type "
+                          <> tname,
+                        span,
+                      )
                   }
-                  let subst = dict.from_list(list.zip(free, targs))
-                  let field_type =
-                    types.type_apply(
-                      subst,
-                      lookup_constructor_field(label, cfields, span),
-                    )
-                  state.pure(field_type)
                 }
-                _ ->
-                  runtime.fatal(
-                    "Record field access requires single-constructor type "
-                    <> tname,
-                  )
               }
             }
           }
@@ -306,26 +298,22 @@ fn infer_expr_inner(
     }
 
     g.Fn(span, params, return_annotation, body) -> {
-      let loc = gleam_types.loc_from_span(span)
-      use inferred <- state.bind(
-        state.map_list(params, fn(param) {
+      use inferred <- is.bind(
+        is.map_list(params, fn(param) {
           let g.FnParameter(name, annotation) = param
           case annotation {
             option.Some(type_expr) ->
               case gleam_types.type_(type_expr) {
-                Ok(type_) -> state.pure(#(type_, bound_for_name(name, type_)))
-                Error(_) ->
-                  runtime.fatal(
-                    "Unsupported type annotation " <> int.to_string(loc),
-                  )
+                Ok(type_) -> is.ok(#(type_, bound_for_name(name, type_)))
+                Error(_) -> is.error("Unsupported type annotation", span)
               }
             option.None -> {
               let param_name = case name {
                 g.Named(name) -> name
                 g.Discarded(_) -> "arg"
               }
-              use arg_type <- state.bind(new_type_var(param_name, span))
-              state.pure(#(arg_type, bound_for_name(name, arg_type)))
+              use arg_type <- is.bind(new_type_var(param_name, span))
+              is.ok(#(arg_type, bound_for_name(name, arg_type)))
             }
           }
         }),
@@ -333,24 +321,21 @@ fn infer_expr_inner(
       let #(arg_types, scopes) = list.unzip(inferred)
       let scope =
         list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-      use scope_applied <- state.bind(scope_apply_state(scope))
+      use scope_applied <- is.bind(scope_apply_state(scope))
       let bound_env = env.with_scope(tenv, scope_applied)
-      use body_type <- state.bind(infer_block(bound_env, body, span))
-      use _ignored <- state.bind(case return_annotation {
+      use body_type <- is.bind(infer_block(bound_env, body, span))
+      use _ignored <- is.bind(case return_annotation {
         option.Some(type_expr) ->
           case gleam_types.type_(type_expr) {
             Ok(type_) -> unify(body_type, type_, span)
-            Error(_) ->
-              runtime.fatal(
-                "Unsupported return annotation " <> int.to_string(loc),
-              )
+            Error(_) -> is.error("Unsupported return annotation", span)
           }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
-      use args_applied <- state.bind(
-        state.map_list(arg_types, fn(arg) { type_apply_state(arg) }),
+      use args_applied <- is.bind(
+        is.map_list(arg_types, fn(arg) { type_apply_state(arg) }),
       )
-      state.pure(types.Tfn(args_applied, body_type, span))
+      is.ok(types.Tfn(args_applied, body_type, span))
     }
 
     g.Call(span, function, arguments) ->
@@ -370,15 +355,16 @@ fn infer_block(
   tenv: env.TEnv,
   statements: List(g.Statement),
   span: g.Span,
-) -> state.State(types.Type) {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(types.Type) {
   case statements {
-    [] -> runtime.fatal("Empty block " <> int.to_string(loc))
+    [] -> is.error("Empty block", span)
 
     [g.Expression(expr)] -> infer_expr(tenv, expr)
 
-    [g.Expression(_), ..] ->
-      runtime.fatal("Block expression position " <> int.to_string(loc))
+    [g.Expression(expr), ..rest] -> {
+      use _ignored <- is.bind(infer_expr(tenv, expr))
+      infer_block(tenv, rest, span)
+    }
 
     [g.Assignment(assign_span, kind, pat, annotation, value), ..rest] ->
       case kind {
@@ -389,18 +375,14 @@ fn infer_block(
       }
 
     [g.Assert(span, expression, message), ..rest] -> {
-      use expr_type <- state.bind(infer_expr(tenv, expression))
-      use _ignored <- state.bind(unify(
-        expr_type,
-        types.Tcon("Bool", span),
-        span,
-      ))
-      use _ignored2 <- state.bind(case message {
+      use expr_type <- is.bind(infer_expr(tenv, expression))
+      use _ignored <- is.bind(unify(expr_type, types.Tcon("Bool", span), span))
+      use _ignored2 <- is.bind(case message {
         option.Some(msg) -> {
-          use msg_type <- state.bind(infer_expr(tenv, msg))
+          use msg_type <- is.bind(infer_expr(tenv, msg))
           unify(msg_type, types.Tcon("String", span), span)
         }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
       infer_block(tenv, rest, span)
     }
@@ -417,12 +399,12 @@ fn infer_use(
   function: g.Expression,
   rest: List(g.Statement),
   block_span: g.Span,
-) -> state.State(types.Type) {
-  use args <- state.bind(infer_use_patterns(tenv, patterns, span))
+) -> is.InferState(types.Type) {
+  use args <- is.bind(infer_use_patterns(tenv, patterns, span))
   let #(arg_types, scope) = args
-  use result_var <- state.bind(new_type_var("use_result", span))
+  use result_var <- is.bind(new_type_var("use_result", span))
   let callback_type = types.Tfn(arg_types, result_var, span)
-  use _ignored <- state.bind(infer_use_function(
+  use _ignored <- is.bind(infer_use_function(
     tenv,
     span,
     function,
@@ -430,10 +412,10 @@ fn infer_use(
     result_var,
     span,
   ))
-  use scope_applied <- state.bind(scope_apply_state(scope))
+  use scope_applied <- is.bind(scope_apply_state(scope))
   let bound_env = env.with_scope(tenv, scope_applied)
-  use rest_type <- state.bind(infer_block(bound_env, rest, block_span))
-  use _ignored2 <- state.bind(unify(result_var, rest_type, block_span))
+  use rest_type <- is.bind(infer_block(bound_env, rest, block_span))
+  use _ignored2 <- is.bind(unify(result_var, rest_type, block_span))
   type_apply_state(rest_type)
 }
 
@@ -444,7 +426,7 @@ fn infer_use_function(
   callback_type: types.Type,
   result_var: types.Type,
   call_span: g.Span,
-) -> state.State(Nil) {
+) -> is.InferState(Nil) {
   case function {
     g.Call(_call_span, target, arguments) -> {
       let args = list.map(arguments, fn(field) { field_expr(field) })
@@ -453,14 +435,14 @@ fn infer_use_function(
           let #(_label, expr) = arg
           expr
         })
-      use target_type <- state.bind(infer_expr_inner(tenv, target))
-      use arg_types <- state.bind(
-        state.map_list(exprs, fn(expr) {
-          use arg_tenv <- state.bind(tenv_apply_state(tenv))
+      use target_type <- is.bind(infer_expr_inner(tenv, target))
+      use arg_types <- is.bind(
+        is.map_list(exprs, fn(expr) {
+          use arg_tenv <- is.bind(tenv_apply_state(tenv))
           infer_expr_inner(arg_tenv, expr)
         }),
       )
-      use target_type_applied <- state.bind(type_apply_state(target_type))
+      use target_type_applied <- is.bind(type_apply_state(target_type))
       unify(
         target_type_applied,
         types.Tfn(list.append(arg_types, [callback_type]), result_var, span),
@@ -468,8 +450,8 @@ fn infer_use_function(
       )
     }
     _ -> {
-      use target_type <- state.bind(infer_expr_inner(tenv, function))
-      use target_type_applied <- state.bind(type_apply_state(target_type))
+      use target_type <- is.bind(infer_expr_inner(tenv, function))
+      use target_type_applied <- is.bind(type_apply_state(target_type))
       unify(
         target_type_applied,
         types.Tfn([callback_type], result_var, span),
@@ -483,29 +465,27 @@ fn infer_use_patterns(
   tenv: env.TEnv,
   patterns: List(g.UsePattern),
   span: g.Span,
-) -> state.State(#(List(types.Type), dict.Dict(String, scheme.Scheme))) {
-  let loc = gleam_types.loc_from_span(span)
-  use inferred <- state.bind(
-    state.map_list(patterns, fn(pattern) {
+) -> is.InferState(#(List(types.Type), dict.Dict(String, scheme.Scheme))) {
+  use inferred <- is.bind(
+    is.map_list(patterns, fn(pattern) {
       let g.UsePattern(pat, annotation) = pattern
-      use tuple <- state.bind(infer_pattern(tenv, pat))
+      use tuple <- is.bind(infer_pattern(tenv, pat))
       let #(pat_type, scope) = tuple
-      use _ignored <- state.bind(case annotation {
+      use _ignored <- is.bind(case annotation {
         option.Some(type_expr) ->
           case gleam_types.type_(type_expr) {
             Ok(type_) -> unify(type_, pat_type, span)
-            Error(_) ->
-              runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+            Error(_) -> is.error("Unsupported annotation", span)
           }
-        option.None -> state.pure(Nil)
+        option.None -> is.ok(Nil)
       })
-      state.pure(#(pat_type, scope))
+      is.ok(#(pat_type, scope))
     }),
   )
   let #(types_, scopes) = list.unzip(inferred)
   let scope =
     list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-  state.pure(#(types_, scope))
+  is.ok(#(types_, scope))
 }
 
 fn infer_assignment(
@@ -515,30 +495,28 @@ fn infer_assignment(
   value: g.Expression,
   rest: List(g.Statement),
   span: g.Span,
-) -> state.State(types.Type) {
-  let loc = gleam_types.loc_from_span(span)
-  use value_type <- state.bind(infer_expr(tenv, value))
-  use _ignored2 <- state.bind(case annotation {
+) -> is.InferState(types.Type) {
+  use value_type <- is.bind(infer_expr(tenv, value))
+  use _ignored2 <- is.bind(case annotation {
     option.Some(type_expr) ->
       case gleam_types.type_(type_expr) {
         Ok(type_) -> unify(type_, value_type, span)
-        Error(_) ->
-          runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+        Error(_) -> is.error("Unsupported annotation", span)
       }
-    option.None -> state.pure(Nil)
+    option.None -> is.ok(Nil)
   })
   case pat {
     g.PatternVariable(_span, name) -> {
-      use applied_env <- state.bind(tenv_apply_state(tenv))
+      use applied_env <- is.bind(tenv_apply_state(tenv))
       let scheme_ = env.generalize(applied_env, value_type)
       let bound_env = env.with_type(applied_env, name, scheme_)
       infer_block(bound_env, rest, span)
     }
     _ -> {
-      use tuple <- state.bind(infer_pattern(tenv, pat))
+      use tuple <- is.bind(infer_pattern(tenv, pat))
       let #(type_, scope) = tuple
-      use _ignored <- state.bind(unify(type_, value_type, span))
-      use scope_applied <- state.bind(scope_apply_state(scope))
+      use _ignored <- is.bind(unify(type_, value_type, span))
+      use scope_applied <- is.bind(scope_apply_state(scope))
       let bound_env = env.with_scope(tenv, scope_applied)
       infer_block(bound_env, rest, span)
     }
@@ -550,7 +528,7 @@ fn infer_call(
   span: g.Span,
   function: g.Expression,
   arguments: List(g.Field(g.Expression)),
-) -> state.State(types.Type) {
+) -> is.InferState(types.Type) {
   let args = list.map(arguments, fn(field) { field_expr(field) })
   let has_labels =
     list.any(args, fn(arg) {
@@ -565,16 +543,16 @@ fn infer_call(
           let #(_label, expr) = arg
           expr
         })
-      use result_var <- state.bind(new_type_var("result", span))
-      use target_type <- state.bind(infer_expr_inner(tenv, function))
-      use arg_types <- state.bind(
-        state.map_list(exprs, fn(expr) {
-          use arg_tenv <- state.bind(tenv_apply_state(tenv))
+      use result_var <- is.bind(new_type_var("result", span))
+      use target_type <- is.bind(infer_expr_inner(tenv, function))
+      use arg_types <- is.bind(
+        is.map_list(exprs, fn(expr) {
+          use arg_tenv <- is.bind(tenv_apply_state(tenv))
           infer_expr_inner(arg_tenv, expr)
         }),
       )
-      use target_type_applied <- state.bind(type_apply_state(target_type))
-      use _ignored <- state.bind(unify(
+      use target_type_applied <- is.bind(type_apply_state(target_type))
+      use _ignored <- is.bind(unify(
         target_type_applied,
         types.Tfn(arg_types, result_var, span),
         span,
@@ -610,33 +588,34 @@ fn infer_constructor_call(
   span: g.Span,
   function: g.Expression,
   fields: List(#(option.Option(String), g.Expression)),
-) -> state.State(types.Type) {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(types.Type) {
   let name = case function {
     g.Variable(_span, name) -> Ok(name)
     g.FieldAccess(_span, g.Variable(_, _module), name) -> Ok(name)
     _ -> Error(Nil)
   }
   case name {
-    Error(_) ->
-      runtime.fatal(
-        "Labelled arguments require constructor " <> int.to_string(loc),
-      )
+    Error(_) -> is.error("Labelled arguments require constructor", span)
     Ok(name) -> {
-      use args2 <- state.bind(instantiate_tcon(tenv, name, span))
+      use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
-      let #(pairs, remaining) =
-        match_constructor_fields(fields, cfields, span, False)
-      case remaining {
-        [] -> Nil
-        _ -> runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
-      }
-      use _ignored <- state.bind(
-        state.each_list(pairs, fn(pair) {
+      use matched <- is.bind(match_constructor_fields(
+        fields,
+        cfields,
+        span,
+        False,
+      ))
+      let #(pairs, remaining) = matched
+      use _ignored_remaining <- is.bind(case remaining {
+        [] -> is.ok(Nil)
+        _ -> is.error("Constructor field mismatch", span)
+      })
+      use _ignored <- is.bind(
+        is.each_list(pairs, fn(pair) {
           let #(field, cfield) = pair
           let #(_label, expr) = field
           let #(_clabel, ctype) = cfield
-          use expr_type <- state.bind(infer_expr(tenv, expr))
+          use expr_type <- is.bind(infer_expr(tenv, expr))
           unify(expr_type, ctype, span)
         }),
       )
@@ -652,11 +631,9 @@ fn infer_fn_capture(
   function: g.Expression,
   args_before: List(g.Field(g.Expression)),
   args_after: List(g.Field(g.Expression)),
-) -> state.State(types.Type) {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(types.Type) {
   case label {
-    option.Some(_) ->
-      runtime.fatal("Labelled capture not supported " <> int.to_string(loc))
+    option.Some(_) -> is.error("Labelled capture not supported", span)
     option.None -> {
       let before = list.map(args_before, fn(field) { field_expr(field) })
       let after = list.map(args_after, fn(field) { field_expr(field) })
@@ -670,13 +647,10 @@ fn infer_fn_capture(
           label != option.None
         })
       {
-        True ->
-          runtime.fatal(
-            "Labelled capture arguments not supported " <> int.to_string(loc),
-          )
+        True -> is.error("Labelled capture arguments not supported", span)
         False -> {
-          use hole_type <- state.bind(new_type_var("capture", span))
-          use result_var <- state.bind(new_type_var("result", span))
+          use hole_type <- is.bind(new_type_var("capture", span))
+          use result_var <- is.bind(new_type_var("result", span))
           let before_exprs =
             list.map(before, fn(arg) {
               let #(_label, expr) = arg
@@ -687,22 +661,22 @@ fn infer_fn_capture(
               let #(_label, expr) = arg
               expr
             })
-          use target_type <- state.bind(infer_expr_inner(tenv, function))
-          use before_types <- state.bind(
-            state.map_list(before_exprs, fn(expr) {
-              use arg_tenv <- state.bind(tenv_apply_state(tenv))
+          use target_type <- is.bind(infer_expr_inner(tenv, function))
+          use before_types <- is.bind(
+            is.map_list(before_exprs, fn(expr) {
+              use arg_tenv <- is.bind(tenv_apply_state(tenv))
               infer_expr_inner(arg_tenv, expr)
             }),
           )
-          use after_types <- state.bind(
-            state.map_list(after_exprs, fn(expr) {
-              use arg_tenv <- state.bind(tenv_apply_state(tenv))
+          use after_types <- is.bind(
+            is.map_list(after_exprs, fn(expr) {
+              use arg_tenv <- is.bind(tenv_apply_state(tenv))
               infer_expr_inner(arg_tenv, expr)
             }),
           )
-          use target_type_applied <- state.bind(type_apply_state(target_type))
+          use target_type_applied <- is.bind(type_apply_state(target_type))
           let all_args = list.append(before_types, [hole_type, ..after_types])
-          use _ignored2 <- state.bind(unify(
+          use _ignored2 <- is.bind(unify(
             target_type_applied,
             types.Tfn(all_args, result_var, span),
             span,
@@ -719,57 +693,56 @@ fn infer_case(
   span: g.Span,
   subjects: List(g.Expression),
   clauses: List(g.Clause),
-) -> state.State(types.Type) {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(types.Type) {
   case subjects {
-    [] -> runtime.fatal("Case subject count " <> int.to_string(loc))
+    [] -> is.error("Case subject count", span)
     _ -> {
-      use subject_types <- state.bind(
-        state.map_list(subjects, fn(subject) { infer_expr(tenv, subject) }),
+      use subject_types <- is.bind(
+        is.map_list(subjects, fn(subject) { infer_expr(tenv, subject) }),
       )
       let target_type = case subject_types {
         [subject] -> subject
         _ -> types.Ttuple(subject_types, span)
       }
       let subject_count = list.length(subjects)
-      let cases =
-        list.flatten(
-          list.map(clauses, fn(clause) {
-            clause_to_cases(clause, subject_count, span)
-          }),
-        )
-      use result_type <- state.bind(new_type_var("match result", span))
-      use result_pair <- state.bind(
-        state.foldl_list(cases, #(target_type, result_type), fn(args, args2) {
+      use cases_groups <- is.bind(
+        is.map_list(clauses, fn(clause) {
+          clause_to_cases(clause, subject_count, span)
+        }),
+      )
+      let cases = list.flatten(cases_groups)
+      use result_type <- is.bind(new_type_var("match result", span))
+      use result_pair <- is.bind(
+        is.foldl_list(cases, #(target_type, result_type), fn(args, args2) {
           let #(target_type_inner, result) = args
           let #(pat, guard, body) = args2
-          use args_inner <- state.bind(infer_pattern(tenv, pat))
+          use args_inner <- is.bind(infer_pattern(tenv, pat))
           let #(type_, scope) = args_inner
-          use _ignored <- state.bind(unify(type_, target_type_inner, span))
-          use scope_applied <- state.bind(scope_apply_state(scope))
+          use _ignored <- is.bind(unify(type_, target_type_inner, span))
+          use scope_applied <- is.bind(scope_apply_state(scope))
           let bound_env = env.with_scope(tenv, scope_applied)
-          use _ignored_guard <- state.bind(case guard {
+          use _ignored_guard <- is.bind(case guard {
             option.Some(expr) -> {
-              use guard_type <- state.bind(infer_expr(bound_env, expr))
+              use guard_type <- is.bind(infer_expr(bound_env, expr))
               unify(guard_type, types.Tcon("Bool", span), span)
             }
-            option.None -> state.pure(Nil)
+            option.None -> is.ok(Nil)
           })
-          use body_type <- state.bind(infer_expr(bound_env, body))
-          use subst <- state.bind(state.get_subst())
-          use _ignored2 <- state.bind(unify(
+          use body_type <- is.bind(infer_expr(bound_env, body))
+          use subst <- is.bind(get_subst_state())
+          use _ignored2 <- is.bind(unify(
             types.type_apply(subst, result),
             body_type,
             span,
           ))
-          use subst2 <- state.bind(state.get_subst())
+          use subst2 <- is.bind(get_subst_state())
           let next_target = types.type_apply(subst2, target_type_inner)
           let next_result = types.type_apply(subst2, result)
-          state.pure(#(next_target, next_result))
+          is.ok(#(next_target, next_result))
         }),
       )
       let #(_target, final_result) = result_pair
-      use target_applied <- state.bind(type_apply_state(target_type))
+      use target_applied <- is.bind(type_apply_state(target_type))
       case
         list.any(cases, fn(args) {
           let #(_pat, guard, _body) = args
@@ -779,9 +752,9 @@ fn infer_case(
           }
         })
       {
-        True -> state.pure(Nil)
+        True -> is.ok(Nil)
         False ->
-          state.bind(
+          is.bind(
             exhaustive.check_exhaustiveness(
               tenv,
               target_applied,
@@ -791,10 +764,10 @@ fn infer_case(
               }),
               span,
             ),
-            state.pure,
+            is.ok,
           )
       }
-      state.pure(final_result)
+      is.ok(final_result)
     }
   }
 }
@@ -803,42 +776,37 @@ fn clause_to_cases(
   clause: g.Clause,
   subject_count: Int,
   span: g.Span,
-) -> List(#(g.Pattern, option.Option(g.Expression), g.Expression)) {
+) -> is.InferState(
+  List(#(g.Pattern, option.Option(g.Expression), g.Expression)),
+) {
   let g.Clause(patterns, guard, body) = clause
-  list.map(patterns, fn(patterns) {
-    let pat = patterns_to_pat(patterns, subject_count, span)
-    #(pat, guard, body)
-  })
+  use pats <- is.bind(
+    is.map_list(patterns, fn(patterns) {
+      use pat <- is.bind(patterns_to_pat(patterns, subject_count, span))
+      is.ok(#(pat, guard, body))
+    }),
+  )
+  is.ok(pats)
 }
 
 fn patterns_to_pat(
   patterns: List(g.Pattern),
   subject_count: Int,
   span: g.Span,
-) -> g.Pattern {
+) -> is.InferState(g.Pattern) {
   case subject_count {
     1 ->
       case patterns {
-        [single] -> single
-        _ ->
-          runtime.fatal(
-            "Case patterns " <> int.to_string(gleam_types.loc_from_span(span)),
-          )
+        [single] -> is.ok(single)
+        _ -> is.error("Case patterns", span)
       }
     _ ->
       case patterns {
-        [] ->
-          runtime.fatal(
-            "Case patterns " <> int.to_string(gleam_types.loc_from_span(span)),
-          )
+        [] -> is.error("Case patterns", span)
         _ ->
           case list.length(patterns) == subject_count {
-            True -> g.PatternTuple(span, patterns)
-            False ->
-              runtime.fatal(
-                "Case patterns "
-                <> int.to_string(gleam_types.loc_from_span(span)),
-              )
+            True -> is.ok(g.PatternTuple(span, patterns))
+            False -> is.error("Case patterns", span)
           }
       }
   }
@@ -850,101 +818,73 @@ fn infer_binary_operator(
   op: g.BinaryOperator,
   left: g.Expression,
   right: g.Expression,
-) -> state.State(types.Type) {
+) -> is.InferState(types.Type) {
   case op {
     g.And | g.Or -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(
-        left_type,
-        types.Tcon("Bool", span),
-        span,
-      ))
-      use _ignored2 <- state.bind(unify(
-        right_type,
-        types.Tcon("Bool", span),
-        span,
-      ))
-      state.pure(types.Tcon("Bool", span))
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("Bool", span), span))
+      use _ignored2 <- is.bind(unify(right_type, types.Tcon("Bool", span), span))
+      is.ok(types.Tcon("Bool", span))
     }
 
     g.Eq | g.NotEq -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(left_type, right_type, span))
-      state.pure(types.Tcon("Bool", span))
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, right_type, span))
+      is.ok(types.Tcon("Bool", span))
     }
 
     g.LtInt | g.LtEqInt | g.GtInt | g.GtEqInt -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(left_type, types.Tcon("Int", span), span))
-      use _ignored2 <- state.bind(unify(
-        right_type,
-        types.Tcon("Int", span),
-        span,
-      ))
-      state.pure(types.Tcon("Bool", span))
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("Int", span), span))
+      use _ignored2 <- is.bind(unify(right_type, types.Tcon("Int", span), span))
+      is.ok(types.Tcon("Bool", span))
     }
 
     g.LtFloat | g.LtEqFloat | g.GtFloat | g.GtEqFloat -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(
-        left_type,
-        types.Tcon("Float", span),
-        span,
-      ))
-      use _ignored2 <- state.bind(unify(
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("Float", span), span))
+      use _ignored2 <- is.bind(unify(
         right_type,
         types.Tcon("Float", span),
         span,
       ))
-      state.pure(types.Tcon("Bool", span))
+      is.ok(types.Tcon("Bool", span))
     }
 
     g.AddInt | g.SubInt | g.MultInt | g.DivInt | g.RemainderInt -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(left_type, types.Tcon("Int", span), span))
-      use _ignored2 <- state.bind(unify(
-        right_type,
-        types.Tcon("Int", span),
-        span,
-      ))
-      state.pure(types.Tcon("Int", span))
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("Int", span), span))
+      use _ignored2 <- is.bind(unify(right_type, types.Tcon("Int", span), span))
+      is.ok(types.Tcon("Int", span))
     }
 
     g.AddFloat | g.SubFloat | g.MultFloat | g.DivFloat -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(
-        left_type,
-        types.Tcon("Float", span),
-        span,
-      ))
-      use _ignored2 <- state.bind(unify(
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("Float", span), span))
+      use _ignored2 <- is.bind(unify(
         right_type,
         types.Tcon("Float", span),
         span,
       ))
-      state.pure(types.Tcon("Float", span))
+      is.ok(types.Tcon("Float", span))
     }
 
     g.Concatenate -> {
-      use left_type <- state.bind(infer_expr(tenv, left))
-      use right_type <- state.bind(infer_expr(tenv, right))
-      use _ignored <- state.bind(unify(
-        left_type,
-        types.Tcon("String", span),
-        span,
-      ))
-      use _ignored2 <- state.bind(unify(
+      use left_type <- is.bind(infer_expr(tenv, left))
+      use right_type <- is.bind(infer_expr(tenv, right))
+      use _ignored <- is.bind(unify(left_type, types.Tcon("String", span), span))
+      use _ignored2 <- is.bind(unify(
         right_type,
         types.Tcon("String", span),
         span,
       ))
-      state.pure(types.Tcon("String", span))
+      is.ok(types.Tcon("String", span))
     }
 
     g.Pipe -> infer_expr(tenv, pipe_to_call(span, left, right))
@@ -957,63 +897,87 @@ fn pipe_to_call(
   right: g.Expression,
 ) -> g.Expression {
   case right {
-    g.Call(call_span, function, arguments) ->
-      g.Call(call_span, function, [g.UnlabelledField(left), ..arguments])
+    g.Call(call_span, function, arguments) -> {
+      let piped = case split_at_unlabelled(arguments, []) {
+        Ok(#(prefix, rest)) ->
+          list.append(prefix, [g.UnlabelledField(left), ..rest])
+        Error(_) ->
+          case arguments {
+            [] -> [g.UnlabelledField(left)]
+            [first, ..rest] -> [first, g.UnlabelledField(left), ..rest]
+          }
+      }
+      g.Call(call_span, function, piped)
+    }
     _ -> g.Call(span, right, [g.UnlabelledField(left)])
+  }
+}
+
+fn split_at_unlabelled(
+  arguments: List(g.Field(g.Expression)),
+  acc: List(g.Field(g.Expression)),
+) -> Result(#(List(g.Field(g.Expression)), List(g.Field(g.Expression))), Nil) {
+  case arguments {
+    [] -> Error(Nil)
+    [first, ..rest] ->
+      case first {
+        g.UnlabelledField(_) -> Ok(#(list.reverse(acc), [first, ..rest]))
+        _ -> split_at_unlabelled(rest, [first, ..acc])
+      }
   }
 }
 
 pub fn infer_pattern(
   tenv: env.TEnv,
   pattern: g.Pattern,
-) -> state.State(#(types.Type, dict.Dict(String, scheme.Scheme))) {
+) -> is.InferState(#(types.Type, dict.Dict(String, scheme.Scheme))) {
   case pattern {
     g.PatternVariable(span, name) -> {
-      use v <- state.bind(new_type_var(name, span))
+      use v <- is.bind(new_type_var(name, span))
       let scope = dict.from_list([#(name, scheme.Forall(set.new(), v))])
-      state.pure(#(v, scope))
+      is.ok(#(v, scope))
     }
 
     g.PatternDiscard(span, _name) -> {
-      use v <- state.bind(new_type_var("any", span))
-      state.pure(#(v, dict.new()))
+      use v <- is.bind(new_type_var("any", span))
+      is.ok(#(v, dict.new()))
     }
 
     g.PatternString(span, _value) ->
-      state.pure(#(types.Tcon("String", span), dict.new()))
+      is.ok(#(types.Tcon("String", span), dict.new()))
 
     g.PatternInt(span, value) ->
       case int.parse(value) {
-        Ok(_) -> state.pure(#(types.Tcon("Int", span), dict.new()))
-        Error(_) -> runtime.fatal("Invalid int pattern")
+        Ok(_) -> is.ok(#(types.Tcon("Int", span), dict.new()))
+        Error(_) -> is.error("Invalid int pattern", span)
       }
 
     g.PatternFloat(span, value) ->
       case float.parse(value) {
-        Ok(_) -> state.pure(#(types.Tcon("Float", span), dict.new()))
-        Error(_) -> runtime.fatal("Invalid float pattern")
+        Ok(_) -> is.ok(#(types.Tcon("Float", span), dict.new()))
+        Error(_) -> is.error("Invalid float pattern", span)
       }
 
     g.PatternTuple(span, items) -> {
-      use inferred <- state.bind(
-        state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
+      use inferred <- is.bind(
+        is.map_list(items, fn(item) { infer_pattern(tenv, item) }),
       )
       let #(types_, scopes) = list.unzip(inferred)
       let scope =
         list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-      state.pure(#(types.Ttuple(types_, span), scope))
+      is.ok(#(types.Ttuple(types_, span), scope))
     }
 
     g.PatternList(span, items, tail) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use elem_type <- state.bind(new_type_var("list_item", span))
+      use elem_type <- is.bind(new_type_var("list_item", span))
       let list_type = types.Tapp(types.Tcon("List", span), [elem_type], span)
-      use inferred <- state.bind(
-        state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
+      use inferred <- is.bind(
+        is.map_list(items, fn(item) { infer_pattern(tenv, item) }),
       )
       let #(item_types, scopes) = list.unzip(inferred)
-      use _ignored <- state.bind(
-        state.each_list(item_types, fn(item_type) {
+      use _ignored <- is.bind(
+        is.each_list(item_types, fn(item_type) {
           unify(item_type, elem_type, span)
         }),
       )
@@ -1021,25 +985,25 @@ pub fn infer_pattern(
         list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
       case tail {
         option.None -> {
-          use list_type_applied <- state.bind(type_apply_state(list_type))
-          state.pure(#(list_type_applied, scope))
+          use list_type_applied <- is.bind(type_apply_state(list_type))
+          is.ok(#(list_type_applied, scope))
         }
         option.Some(tail_pat) -> {
-          use tail_tuple <- state.bind(infer_pattern(tenv, tail_pat))
+          use tail_tuple <- is.bind(infer_pattern(tenv, tail_pat))
           let #(tail_type, tail_scope) = tail_tuple
-          use _ignored <- state.bind(unify(tail_type, list_type, span))
+          use _ignored <- is.bind(unify(tail_type, list_type, span))
           let scope = dict.merge(scope, tail_scope)
-          use list_type_applied <- state.bind(type_apply_state(list_type))
-          state.pure(#(list_type_applied, scope))
+          use list_type_applied <- is.bind(type_apply_state(list_type))
+          is.ok(#(list_type_applied, scope))
         }
       }
     }
 
     g.PatternAssignment(_span, pat, name) -> {
-      use tuple <- state.bind(infer_pattern(tenv, pat))
+      use tuple <- is.bind(infer_pattern(tenv, pat))
       let #(type_, scope) = tuple
       let scope = dict.insert(scope, name, scheme.Forall(set.new(), type_))
-      state.pure(#(type_, scope))
+      is.ok(#(type_, scope))
     }
 
     g.PatternConcatenate(span, _prefix, prefix_name, rest_name) -> {
@@ -1068,50 +1032,53 @@ pub fn infer_pattern(
             g.Discarded(_) -> dict.new()
           },
         )
-      state.pure(#(types.Tcon("String", span), scope))
+      is.ok(#(types.Tcon("String", span), scope))
     }
 
     g.PatternBitString(span, segments) -> {
-      use scopes <- state.bind(
-        state.map_list(segments, fn(segment) {
+      use scopes <- is.bind(
+        is.map_list(segments, fn(segment) {
           infer_bitstring_pat_segment(tenv, segment)
         }),
       )
       let scope =
         list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-      state.pure(#(types.Tcon("BitString", span), scope))
+      is.ok(#(types.Tcon("BitString", span), scope))
     }
 
     g.PatternVariant(span, _module, name, arguments, with_spread) -> {
-      let loc = gleam_types.loc_from_span(span)
-      use args2 <- state.bind(instantiate_tcon(tenv, name, span))
+      use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
       let fields = list.map(arguments, fn(field) { pattern_field(field) })
-      let #(pairs, remaining) =
-        match_constructor_fields(fields, cfields, span, with_spread)
-      case remaining, with_spread {
-        [], _ -> Nil
-        _, True -> Nil
-        _, False ->
-          runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
-      }
-      use inferred <- state.bind(
-        state.map_list(pairs, fn(pair) {
+      use matched <- is.bind(match_constructor_fields(
+        fields,
+        cfields,
+        span,
+        with_spread,
+      ))
+      let #(pairs, remaining) = matched
+      use _ignored_remaining <- is.bind(case remaining, with_spread {
+        [], _ -> is.ok(Nil)
+        _, True -> is.ok(Nil)
+        _, False -> is.error("Constructor field mismatch", span)
+      })
+      use inferred <- is.bind(
+        is.map_list(pairs, fn(pair) {
           let #(field, cfield) = pair
           let #(_label, pat) = field
           let #(_clabel, ctype) = cfield
-          use tuple <- state.bind(infer_pattern(tenv, pat))
+          use tuple <- is.bind(infer_pattern(tenv, pat))
           let #(ptype, scope) = tuple
-          use _ignored <- state.bind(unify(ptype, ctype, span))
-          state.pure(scope)
+          use _ignored <- is.bind(unify(ptype, ctype, span))
+          is.ok(scope)
         }),
       )
-      use cres_applied <- state.bind(type_apply_state(cres))
+      use cres_applied <- is.bind(type_apply_state(cres))
       let scope =
         list.fold(inferred, dict.new(), fn(acc, scope) {
           dict.merge(acc, scope)
         })
-      state.pure(#(cres_applied, scope))
+      is.ok(#(cres_applied, scope))
     }
   }
 }
@@ -1157,41 +1124,48 @@ fn match_constructor_fields(
   cfields: List(#(option.Option(String), b)),
   span: g.Span,
   allow_missing: Bool,
-) -> #(
-  List(#(#(option.Option(String), a), #(option.Option(String), b))),
-  List(#(option.Option(String), b)),
+) -> is.InferState(
+  #(
+    List(#(#(option.Option(String), a), #(option.Option(String), b))),
+    List(#(option.Option(String), b)),
+  ),
 ) {
-  let loc = gleam_types.loc_from_span(span)
   case fields {
     [] ->
       case allow_missing {
-        True -> #([], cfields)
-        False -> #([], cfields)
+        True -> is.ok(#([], cfields))
+        False -> is.ok(#([], cfields))
       }
     [field, ..rest] -> {
       let #(label, _value) = field
       case label {
         option.None ->
           case cfields {
-            [] ->
-              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+            [] -> is.error("Constructor field mismatch", span)
             [cfield, ..ctail] -> {
-              let #(pairs, remaining) =
-                match_constructor_fields(rest, ctail, span, allow_missing)
-              #([#(field, cfield), ..pairs], remaining)
+              use next <- is.bind(match_constructor_fields(
+                rest,
+                ctail,
+                span,
+                allow_missing,
+              ))
+              let #(pairs, remaining) = next
+              is.ok(#([#(field, cfield), ..pairs], remaining))
             }
           }
         option.Some(name) -> {
           let #(maybe, remaining) = find_field(name, cfields, [])
           case maybe {
-            option.None ->
-              runtime.fatal(
-                "Unknown field " <> name <> " " <> int.to_string(loc),
-              )
+            option.None -> is.error("Unknown field " <> name, span)
             option.Some(cfield) -> {
-              let #(pairs, remaining2) =
-                match_constructor_fields(rest, remaining, span, allow_missing)
-              #([#(field, cfield), ..pairs], remaining2)
+              use next <- is.bind(match_constructor_fields(
+                rest,
+                remaining,
+                span,
+                allow_missing,
+              ))
+              let #(pairs, remaining2) = next
+              is.ok(#([#(field, cfield), ..pairs], remaining2))
             }
           }
         }
@@ -1227,15 +1201,15 @@ fn find_field(
 fn infer_bitstring_expr_options(
   tenv: env.TEnv,
   segment: #(g.Expression, List(g.BitStringSegmentOption(g.Expression))),
-) -> state.State(Nil) {
+) -> is.InferState(Nil) {
   let #(_expr, options) = segment
-  state.each_list(options, fn(opt) {
+  is.each_list(options, fn(opt) {
     case opt {
       g.SizeValueOption(expr) -> {
-        use _ignored <- state.bind(infer_expr(tenv, expr))
-        state.pure(Nil)
+        use _ignored <- is.bind(infer_expr(tenv, expr))
+        is.ok(Nil)
       }
-      _ -> state.pure(Nil)
+      _ -> is.ok(Nil)
     }
   })
 }
@@ -1243,26 +1217,26 @@ fn infer_bitstring_expr_options(
 fn infer_bitstring_pat_segment(
   tenv: env.TEnv,
   segment: #(g.Pattern, List(g.BitStringSegmentOption(g.Pattern))),
-) -> state.State(dict.Dict(String, scheme.Scheme)) {
+) -> is.InferState(dict.Dict(String, scheme.Scheme)) {
   let #(pat, options) = segment
-  use tuple <- state.bind(infer_pattern(tenv, pat))
+  use tuple <- is.bind(infer_pattern(tenv, pat))
   let #(_type, scope) = tuple
-  use option_scope <- state.bind(infer_bitstring_pat_options(tenv, options))
-  state.pure(dict.merge(scope, option_scope))
+  use option_scope <- is.bind(infer_bitstring_pat_options(tenv, options))
+  is.ok(dict.merge(scope, option_scope))
 }
 
 fn infer_bitstring_pat_options(
   tenv: env.TEnv,
   options: List(g.BitStringSegmentOption(g.Pattern)),
-) -> state.State(dict.Dict(String, scheme.Scheme)) {
-  state.foldl_list(options, dict.new(), fn(acc, opt) {
+) -> is.InferState(dict.Dict(String, scheme.Scheme)) {
+  is.foldl_list(options, dict.new(), fn(acc, opt) {
     case opt {
       g.SizeValueOption(pat) -> {
-        use tuple <- state.bind(infer_pattern(tenv, pat))
+        use tuple <- is.bind(infer_pattern(tenv, pat))
         let #(_type, scope) = tuple
-        state.pure(dict.merge(acc, scope))
+        is.ok(dict.merge(acc, scope))
       }
-      _ -> state.pure(acc)
+      _ -> is.ok(acc)
     }
   })
 }
@@ -1271,53 +1245,52 @@ pub fn instantiate_tcon(
   tenv: env.TEnv,
   name: String,
   span: g.Span,
-) -> state.State(#(List(#(option.Option(String), types.Type)), types.Type)) {
+) -> is.InferState(#(List(#(option.Option(String), types.Type)), types.Type)) {
   let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
   case dict.get(tcons, name) {
-    Error(_) -> runtime.fatal("Unknown type constructor: " <> name)
+    Error(_) -> is.error("Unknown type constructor: " <> name, span)
     Ok(#(free, cargs, cres)) -> {
-      use subst <- state.bind(make_subst_for_free(set.from_list(free), span))
+      use subst <- is.bind(make_subst_for_free(set.from_list(free), span))
       let args =
         list.map(cargs, fn(field) {
           let #(label, t) = field
           #(label, types.type_apply(subst, t))
         })
       let res = types.type_apply(subst, cres)
-      state.pure(#(args, res))
+      is.ok(#(args, res))
     }
   }
 }
 
-pub fn new_type_var(name: String, span: g.Span) -> state.State(types.Type) {
-  use idx <- state.bind(state.next_idx())
-  state.pure(types.Tvar(name <> ":" <> int.to_string(idx), span))
+pub fn new_type_var(name: String, span: g.Span) -> is.InferState(types.Type) {
+  use idx <- is.bind(next_idx_state())
+  is.ok(types.Tvar(name <> ":" <> int.to_string(idx), span))
 }
 
 pub fn make_subst_for_free(
   vars: set.Set(String),
   span: g.Span,
-) -> state.State(types.Subst) {
-  use mapping <- state.bind(
-    state.map_list(set.to_list(vars), fn(id) {
-      use new_var <- state.bind(new_type_var(id, span))
-      state.pure(#(id, new_var))
+) -> is.InferState(types.Subst) {
+  use mapping <- is.bind(
+    is.map_list(set.to_list(vars), fn(id) {
+      use new_var <- is.bind(new_type_var(id, span))
+      is.ok(#(id, new_var))
     }),
   )
-  state.pure(dict.from_list(mapping))
+  is.ok(dict.from_list(mapping))
 }
 
 pub fn instantiate(
   scheme_: scheme.Scheme,
   span: g.Span,
-) -> state.State(types.Type) {
+) -> is.InferState(types.Type) {
   let scheme.Forall(vars, type_) = scheme_
-  use subst <- state.bind(make_subst_for_free(vars, span))
-  state.pure(types.type_apply(subst, type_))
+  use subst <- is.bind(make_subst_for_free(vars, span))
+  is.ok(types.type_apply(subst, type_))
 }
 
-pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> state.State(Nil) {
-  let loc = gleam_types.loc_from_span(span)
-  use subst <- state.bind(state.get_subst())
+pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> is.InferState(Nil) {
+  use subst <- is.bind(get_subst_state())
   let left = types.type_apply(subst, t1)
   let right = types.type_apply(subst, t2)
   case left, right {
@@ -1325,89 +1298,77 @@ pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> state.State(Nil) {
     t, types.Tvar(var, _) -> var_bind(var, t, span)
     types.Tcon(a, _), types.Tcon(b, _) ->
       case a == b {
-        True -> state.pure(Nil)
+        True -> is.ok(Nil)
         False ->
-          runtime.fatal(
-            "Incompatible concrete types: "
-            <> a
-            <> " ("
-            <> string.inspect(span)
-            <> ") vs "
-            <> b
-            <> " ("
-            <> string.inspect(span)
-            <> ")",
-          )
+          is.error("Incompatible concrete types: " <> a <> " vs " <> b, span)
       }
     types.Tapp(t1a, a1, _), types.Tapp(t2a, a2, _) ->
       case list.length(a1) == list.length(a2) {
         True -> {
-          use _ignored <- state.bind(unify(t1a, t2a, span))
-          use subst <- state.bind(state.get_subst())
+          use _ignored <- is.bind(unify(t1a, t2a, span))
+          use subst <- is.bind(get_subst_state())
           let left = list.map(a1, fn(arg) { types.type_apply(subst, arg) })
           let right = list.map(a2, fn(arg) { types.type_apply(subst, arg) })
-          state.each_list(list.zip(left, right), fn(pair) {
+          is.each_list(list.zip(left, right), fn(pair) {
             let #(l, r) = pair
             unify(l, r, span)
           })
         }
         False ->
-          runtime.fatal(
-            "Incompatible type application arity "
-            <> int.to_string(loc)
-            <> " "
-            <> runtime.jsonify(t1)
-            <> " (vs) "
-            <> runtime.jsonify(t2),
+          is.error(
+            "Incompatible type application arity: "
+              <> types.type_to_string(t1)
+              <> " vs "
+              <> types.type_to_string(t2),
+            span,
           )
       }
     types.Tfn(args1, res1, _), types.Tfn(args2, res2, _) ->
       case list.length(args1) == list.length(args2) {
         True -> {
-          use _ignored <- state.bind(
-            state.each_list(list.zip(args1, args2), fn(args) {
+          use _ignored <- is.bind(
+            is.each_list(list.zip(args1, args2), fn(args) {
               let #(left, right) = args
               unify(left, right, span)
             }),
           )
-          use subst <- state.bind(state.get_subst())
+          use subst <- is.bind(get_subst_state())
           let left = types.type_apply(subst, res1)
           let right = types.type_apply(subst, res2)
           unify(left, right, span)
         }
         False ->
-          runtime.fatal(
-            "Incompatible function arity "
-            <> int.to_string(loc)
-            <> " "
-            <> runtime.jsonify(t1)
-            <> " (vs) "
-            <> runtime.jsonify(t2),
+          is.error(
+            "Incompatible function arity: "
+              <> types.type_to_string(t1)
+              <> " vs "
+              <> types.type_to_string(t2),
+            span,
           )
       }
     types.Ttuple(args1, _), types.Ttuple(args2, _) ->
       case list.length(args1) == list.length(args2) {
         True ->
-          state.each_list(list.zip(args1, args2), fn(args) {
+          is.each_list(list.zip(args1, args2), fn(args) {
             let #(left, right) = args
             unify(left, right, span)
           })
         False ->
-          runtime.fatal(
-            "Incompatible tuple arity "
-            <> int.to_string(loc)
-            <> " "
-            <> runtime.jsonify(t1)
-            <> " (vs) "
-            <> runtime.jsonify(t2),
+          is.error(
+            "Incompatible tuple arity: "
+              <> types.type_to_string(t1)
+              <> " vs "
+              <> types.type_to_string(t2),
+            span,
           )
       }
     _, _ ->
-      runtime.fatal(
+      is.error(
         "Incompatible types: "
-        <> runtime.jsonify(t1)
-        <> " (vs) "
-        <> runtime.jsonify(t2),
+          <> types.type_to_string(t1)
+          <> " vs "
+          <> types.type_to_string(t2),
+        span,
       )
   }
 }
@@ -1415,26 +1376,27 @@ pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> state.State(Nil) {
 pub fn var_bind(
   var: String,
   type_: types.Type,
-  _span: g.Span,
-) -> state.State(Nil) {
+  span: g.Span,
+) -> is.InferState(Nil) {
   case type_ {
     types.Tvar(v, _) ->
       case var == v {
-        True -> state.pure(Nil)
+        True -> is.ok(Nil)
         False -> {
-          use _ignored <- state.bind(state.put_subst(one_subst(var, type_)))
-          state.pure(Nil)
+          use _ignored <- is.bind(put_subst_state(one_subst(var, type_)))
+          is.ok(Nil)
         }
       }
     _ ->
       case set.contains(types.type_free(type_), var) {
         True ->
-          runtime.fatal(
-            "Cycle found while unifying type with type variable. " <> var,
+          is.error(
+            "Cycle found while unifying type with type variable: " <> var,
+            span,
           )
         False -> {
-          use _ignored <- state.bind(state.put_subst(one_subst(var, type_)))
-          state.pure(Nil)
+          use _ignored <- is.bind(put_subst_state(one_subst(var, type_)))
+          is.ok(Nil)
         }
       }
   }
@@ -1444,43 +1406,59 @@ pub fn one_subst(var: String, type_: types.Type) -> types.Subst {
   dict.from_list([#(var, type_)])
 }
 
-fn tenv_apply_state(tenv: env.TEnv) -> state.State(env.TEnv) {
-  state.apply_with(env.apply, tenv)
+fn tenv_apply_state(tenv: env.TEnv) -> is.InferState(env.TEnv) {
+  is.apply_with(env.apply, tenv)
 }
 
-fn type_apply_state(type_: types.Type) -> state.State(types.Type) {
-  state.apply_with(types.type_apply, type_)
+fn type_apply_state(type_: types.Type) -> is.InferState(types.Type) {
+  is.apply_with(types.type_apply, type_)
 }
 
 fn scope_apply_state(
   scope: dict.Dict(String, scheme.Scheme),
-) -> state.State(dict.Dict(String, scheme.Scheme)) {
-  state.apply_with(env.scope_apply, scope)
+) -> is.InferState(dict.Dict(String, scheme.Scheme)) {
+  is.apply_with(env.scope_apply, scope)
+}
+
+fn get_subst_state() -> is.InferState(dict.Dict(String, types.Type)) {
+  is.lift(state.get_subst())
+}
+
+fn put_subst_state(
+  new_subst: dict.Dict(String, types.Type),
+) -> is.InferState(Nil) {
+  is.lift(state.put_subst(new_subst))
+}
+
+fn reset_subst_state(
+  new_subst: dict.Dict(String, types.Type),
+) -> is.InferState(dict.Dict(String, types.Type)) {
+  is.lift(state.reset_subst(new_subst))
+}
+
+fn next_idx_state() -> is.InferState(Int) {
+  is.lift(state.next_idx())
 }
 
 fn tuple_index_type(
   args: List(types.Type),
   index: Int,
   span: g.Span,
-) -> state.State(types.Type) {
+) -> is.InferState(types.Type) {
   case args, index {
-    [], _ ->
-      runtime.fatal(
-        "Tuple index out of range "
-        <> int.to_string(gleam_types.loc_from_span(span)),
-      )
+    [], _ -> is.error("Tuple index out of range", span)
     [head, ..], 0 -> type_apply_state(head)
     [_head, ..tail], _ -> tuple_index_type(tail, index - 1, span)
   }
 }
 
-fn tuple_index_vars(count: Int, span: g.Span) -> state.State(List(types.Type)) {
+fn tuple_index_vars(count: Int, span: g.Span) -> is.InferState(List(types.Type)) {
   case count <= 0 {
-    True -> state.pure([])
+    True -> is.ok([])
     False -> {
-      use rest <- state.bind(tuple_index_vars(count - 1, span))
-      use v <- state.bind(new_type_var("tuple_item", span))
-      state.pure([v, ..rest])
+      use rest <- is.bind(tuple_index_vars(count - 1, span))
+      use v <- is.bind(new_type_var("tuple_item", span))
+      is.ok([v, ..rest])
     }
   }
 }
@@ -1489,16 +1467,15 @@ fn lookup_constructor_field(
   label: String,
   cfields: List(#(option.Option(String), types.Type)),
   span: g.Span,
-) -> types.Type {
-  let loc = gleam_types.loc_from_span(span)
+) -> is.InferState(types.Type) {
   case cfields {
-    [] -> runtime.fatal("Unknown field " <> label <> " " <> int.to_string(loc))
+    [] -> is.error("Unknown field " <> label, span)
     [field, ..rest] -> {
       let #(maybe, t) = field
       case maybe {
         option.Some(name) ->
           case name == label {
-            True -> t
+            True -> is.ok(t)
             False -> lookup_constructor_field(label, rest, span)
           }
         option.None -> lookup_constructor_field(label, rest, span)
