@@ -584,7 +584,11 @@ fn constructor_name(
 ) -> option.Option(String) {
   let name = case function {
     g.Variable(_span, name) -> option.Some(name)
-    g.FieldAccess(_span, g.Variable(_, _module), name) -> option.Some(name)
+    g.FieldAccess(_span, g.Variable(_, module_name), name) ->
+      case env.resolve_module(tenv, module_name) {
+        Ok(module_key) -> option.Some(module_key <> "/" <> name)
+        Error(_) -> option.None
+      }
     _ -> option.None
   }
   case name {
@@ -615,7 +619,11 @@ fn infer_constructor_call(
 ) -> is.InferState(types.Type) {
   let name = case function {
     g.Variable(_span, name) -> Ok(name)
-    g.FieldAccess(_span, g.Variable(_, _module), name) -> Ok(name)
+    g.FieldAccess(_span, g.Variable(_, module_name), name) ->
+      case env.resolve_module(tenv, module_name) {
+        Ok(module_key) -> Ok(module_key <> "/" <> name)
+        Error(_) -> Error(Nil)
+      }
     _ -> Error(Nil)
   }
   case name {
@@ -1193,39 +1201,44 @@ pub fn infer_pattern(
       is.ok(#(types.Tcon("BitString", span), scope))
     }
 
-    g.PatternVariant(span, _module, name, arguments, with_spread) -> {
-      use args2 <- is.bind(instantiate_tcon(tenv, name, span))
-      let #(cfields, cres) = args2
-      let fields = list.map(arguments, fn(field) { pattern_field(field) })
-      use matched <- is.bind(match_constructor_fields(
-        fields,
-        cfields,
-        span,
-        with_spread,
-      ))
-      let #(pairs, remaining) = matched
-      use _ignored_remaining <- is.bind(case remaining, with_spread {
-        [], _ -> is.ok(Nil)
-        _, True -> is.ok(Nil)
-        _, False -> is.error("Constructor field mismatch", span)
-      })
-      use inferred <- is.bind(
-        is.map_list(pairs, fn(pair) {
-          let #(field, cfield) = pair
-          let #(_label, pat) = field
-          let #(_clabel, ctype) = cfield
-          use tuple <- is.bind(infer_pattern(tenv, pat))
-          let #(ptype, scope) = tuple
-          use _ignored <- is.bind(unify(ptype, ctype, span))
-          is.ok(scope)
-        }),
-      )
-      use cres_applied <- is.bind(type_apply_state(cres))
-      let scope =
-        list.fold(inferred, dict.new(), fn(acc, scope) {
-          dict.merge(acc, scope)
-        })
-      is.ok(#(cres_applied, scope))
+    g.PatternVariant(span, module, name, arguments, with_spread) -> {
+      case resolve_pattern_constructor(tenv, module, name) {
+        Error(_) -> is.error("Unknown type constructor " <> name, span)
+        Ok(constructor_name) -> {
+          use args2 <- is.bind(instantiate_tcon(tenv, constructor_name, span))
+          let #(cfields, cres) = args2
+          let fields = list.map(arguments, fn(field) { pattern_field(field) })
+          use matched <- is.bind(match_constructor_fields(
+            fields,
+            cfields,
+            span,
+            with_spread,
+          ))
+          let #(pairs, remaining) = matched
+          use _ignored_remaining <- is.bind(case remaining, with_spread {
+            [], _ -> is.ok(Nil)
+            _, True -> is.ok(Nil)
+            _, False -> is.error("Constructor field mismatch", span)
+          })
+          use inferred <- is.bind(
+            is.map_list(pairs, fn(pair) {
+              let #(field, cfield) = pair
+              let #(_label, pat) = field
+              let #(_clabel, ctype) = cfield
+              use tuple <- is.bind(infer_pattern(tenv, pat))
+              let #(ptype, scope) = tuple
+              use _ignored <- is.bind(unify(ptype, ctype, span))
+              is.ok(scope)
+            }),
+          )
+          use cres_applied <- is.bind(type_apply_state(cres))
+          let scope =
+            list.fold(inferred, dict.new(), fn(acc, scope) {
+              dict.merge(acc, scope)
+            })
+          is.ok(#(cres_applied, scope))
+        }
+      }
     }
   }
 }
@@ -1263,6 +1276,21 @@ fn pattern_field(
       option.Some(label),
       g.PatternVariable(loc, label),
     )
+  }
+}
+
+fn resolve_pattern_constructor(
+  tenv: env.TEnv,
+  module: option.Option(String),
+  name: String,
+) -> Result(String, Nil) {
+  case module {
+    option.None -> Ok(name)
+    option.Some(module_name) ->
+      case env.resolve_module(tenv, module_name) {
+        Ok(module_key) -> Ok(module_key <> "/" <> name)
+        Error(_) -> Error(Nil)
+      }
   }
 }
 

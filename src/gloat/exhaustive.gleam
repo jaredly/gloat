@@ -89,7 +89,7 @@ pub fn pattern_to_ex_pattern(
           }
         _ -> is.error("Tuple pattern with non-tuple type", span)
       }
-    g.PatternVariant(span, _module, name, arguments, with_spread) -> {
+    g.PatternVariant(span, module, name, arguments, with_spread) -> {
       use tcon <- is.bind(is.from_result(types.tcon_and_args(type_, [], span)))
       let #(tname, targs) = tcon
       let env.TEnv(
@@ -101,36 +101,49 @@ pub fn pattern_to_ex_pattern(
         _params,
         _type_names,
       ) = tenv
-
-      case dict.get(tcons, name) {
+      let constructor_name = case module {
+        option.None -> Ok(name)
+        option.Some(module_name) ->
+          case env.resolve_module(tenv, module_name) {
+            Ok(module_key) -> Ok(module_key <> "/" <> name)
+            Error(_) -> Error(Nil)
+          }
+      }
+      case constructor_name {
         Error(_) -> is.error("Unknown type constructor " <> name, span)
-        Ok(value) -> {
-          let #(free_names, cargs, _cres) = value
-          let subst = dict.from_list(list.zip(free_names, targs))
-          let fields = list.map(arguments, fn(field) { pattern_field(field) })
-          use aligned <- is.bind(align_constructor_fields(
-            fields,
-            cargs,
-            span,
-            with_spread,
-          ))
-          use converted_args <- is.bind(
-            is.map_list(list.zip(aligned, cargs), fn(pair) {
-              let #(maybe_pat, cfield) = pair
-              let #(_label, ctype) = cfield
-              case maybe_pat {
-                option.None -> is.ok(ExAny)
-                option.Some(pat) ->
-                  pattern_to_ex_pattern(tenv, #(
-                    pat,
-                    types.type_apply(subst, ctype),
-                  ))
-              }
-            }),
-          )
+        Ok(constructor_name) ->
+          case dict.get(tcons, constructor_name) {
+            Error(_) ->
+              is.error("Unknown type constructor " <> constructor_name, span)
+            Ok(value) -> {
+              let #(free_names, cargs, _cres) = value
+              let subst = dict.from_list(list.zip(free_names, targs))
+              let fields =
+                list.map(arguments, fn(field) { pattern_field(field) })
+              use aligned <- is.bind(align_constructor_fields(
+                fields,
+                cargs,
+                span,
+                with_spread,
+              ))
+              use converted_args <- is.bind(
+                is.map_list(list.zip(aligned, cargs), fn(pair) {
+                  let #(maybe_pat, cfield) = pair
+                  let #(_label, ctype) = cfield
+                  case maybe_pat {
+                    option.None -> is.ok(ExAny)
+                    option.Some(pat) ->
+                      pattern_to_ex_pattern(tenv, #(
+                        pat,
+                        types.type_apply(subst, ctype),
+                      ))
+                  }
+                }),
+              )
 
-          is.ok(ExConstructor(name, tname, converted_args))
-        }
+              is.ok(ExConstructor(constructor_name, tname, converted_args))
+            }
+          }
       }
     }
   }
