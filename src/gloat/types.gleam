@@ -6,7 +6,7 @@ import gloat/runtime
 
 pub type Type {
   Tvar(String, Int)
-  Tapp(Type, Type, Int)
+  Tapp(Type, List(Type), Int)
   Tcon(String, Int)
   Ttuple(List(Type), Int)
   Tfn(List(Type), Type, Int)
@@ -18,7 +18,13 @@ pub type Subst =
 pub fn type_eq(one: Type, two: Type) -> Bool {
   case one, two {
     Tvar(id, _), Tvar(id2, _) -> id == id2
-    Tapp(t1, a1, _), Tapp(t2, a2, _) -> type_eq(t1, t2) && type_eq(a1, a2)
+    Tapp(t1, a1, _), Tapp(t2, a2, _) ->
+      type_eq(t1, t2)
+      && list.length(a1) == list.length(a2)
+      && list.all(list.zip(a1, a2), fn(pair) {
+        let #(left, right) = pair
+        type_eq(left, right)
+      })
     Tcon(name, _), Tcon(name2, _) -> name == name2
     Ttuple(args, _), Ttuple(args2, _) ->
       list.length(args) == list.length(args2)
@@ -63,11 +69,11 @@ pub fn type_to_string_simple(type_: Type) -> String {
       "(, "
       <> string.join(list.map(args, type_to_string_simple), with: " ")
       <> ")"
-    Tapp(target, arg, _) ->
+    Tapp(target, args, _) ->
       "("
       <> type_to_string_simple(target)
       <> " "
-      <> type_to_string_simple(arg)
+      <> string.join(list.map(args, type_to_string_simple), with: " ")
       <> ")"
     Tcon(name, _) -> name
   }
@@ -108,7 +114,7 @@ pub fn unwrap_fn(type_: Type) -> #(List(Type), Type) {
 
 pub fn unwrap_app(type_: Type, args: List(Type)) -> #(Type, List(Type)) {
   case type_ {
-    Tapp(a, b, _) -> unwrap_app(a, [b, ..args])
+    Tapp(a, b, _) -> unwrap_app(a, list.append(b, args))
     _ -> #(type_, args)
   }
 }
@@ -117,7 +123,8 @@ pub fn type_free(type_: Type) -> set.Set(String) {
   case type_ {
     Tvar(id, _) -> set.insert(set.new(), id)
     Tcon(_, _) -> set.new()
-    Tapp(a, b, _) -> set.union(type_free(a), type_free(b))
+    Tapp(a, b, _) ->
+      list.fold(b, type_free(a), fn(acc, arg) { set.union(acc, type_free(arg)) })
     Ttuple(args, _) ->
       list.fold(args, set.new(), fn(acc, arg) { set.union(acc, type_free(arg)) })
     Tfn(args, res, _) ->
@@ -135,7 +142,11 @@ pub fn type_apply(subst: Subst, type_: Type) -> Type {
         Error(_) -> type_
       }
     Tapp(target, arg, loc) ->
-      Tapp(type_apply(subst, target), type_apply(subst, arg), loc)
+      Tapp(
+        type_apply(subst, target),
+        list.map(arg, fn(arg) { type_apply(subst, arg) }),
+        loc,
+      )
     Ttuple(args, loc) ->
       Ttuple(list.map(args, fn(arg) { type_apply(subst, arg) }), loc)
     Tfn(args, res, loc) ->
@@ -163,7 +174,11 @@ pub fn type_con_to_var(vars: set.Set(String), type_: Type) -> Type {
         False -> type_
       }
     Tapp(a, b, loc) ->
-      Tapp(type_con_to_var(vars, a), type_con_to_var(vars, b), loc)
+      Tapp(
+        type_con_to_var(vars, a),
+        list.map(b, fn(arg) { type_con_to_var(vars, arg) }),
+        loc,
+      )
     Ttuple(args, loc) ->
       Ttuple(list.map(args, fn(arg) { type_con_to_var(vars, arg) }), loc)
     Tfn(args, res, loc) ->
@@ -177,10 +192,10 @@ pub fn type_con_to_var(vars: set.Set(String), type_: Type) -> Type {
 
 pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Int))) {
   case type_ {
-    Tapp(target, arg, loc) -> {
-      let #(target_inner, inner) = type_unroll_app(target)
-      #(target_inner, [#(arg, loc), ..inner])
-    }
+    Tapp(target, args, loc) -> #(
+      target,
+      list.map(args, fn(arg) { #(arg, loc) }),
+    )
     Ttuple(_, _) -> #(type_, [])
     Tfn(_, _, _) -> #(type_, [])
     _ -> #(type_, [])
@@ -203,7 +218,7 @@ pub fn tcon_and_args(
         <> runtime.jsonify(coll),
       )
     Tcon(name, _) -> #(name, coll)
-    Tapp(target, arg, _) -> tcon_and_args(target, [arg, ..coll], loc)
+    Tapp(target, args, _) -> tcon_and_args(target, list.append(args, coll), loc)
     Ttuple(args, _) -> #("tuple", args)
     Tfn(_, _, _) ->
       runtime.fatal(
@@ -234,7 +249,7 @@ pub fn type_resolve_aliases(
     _ -> {
       let #(target, args) = type_unroll_app(type_)
       let resolved_args =
-        list.map(list.reverse(args), fn(args) {
+        list.map(args, fn(args) {
           let #(arg, _loc) = args
           type_resolve_aliases(aliases, arg)
         })
@@ -247,12 +262,16 @@ pub fn type_resolve_aliases(
               type_resolve_aliases(aliases, type_apply(subst, alias_type))
             }
             Error(_) ->
-              list.fold(resolved_args, target, fn(acc, arg) {
-                Tapp(acc, arg, loc)
-              })
+              case resolved_args {
+                [] -> target
+                _ -> Tapp(target, resolved_args, loc)
+              }
           }
         Tvar(_, loc) ->
-          list.fold(resolved_args, target, fn(acc, arg) { Tapp(acc, arg, loc) })
+          case resolved_args {
+            [] -> target
+            _ -> Tapp(target, resolved_args, loc)
+          }
         _ -> target
       }
     }

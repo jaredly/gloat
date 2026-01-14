@@ -794,11 +794,15 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
             _ -> name
           }
           result.map(result.all(list.map(parameters, type_)), fn(params) {
-            list.fold(
-              params,
-              types.Tcon(resolved, loc_from_span(span)),
-              fn(acc, param) { types.Tapp(acc, param, loc_from_span(span)) },
-            )
+            case params {
+              [] -> types.Tcon(resolved, loc_from_span(span))
+              _ ->
+                types.Tapp(
+                  types.Tcon(resolved, loc_from_span(span)),
+                  params,
+                  loc_from_span(span),
+                )
+            }
           })
         }
       }

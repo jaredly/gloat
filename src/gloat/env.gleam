@@ -45,8 +45,25 @@ pub fn with_scope(env: TEnv, scope: dict.Dict(String, scheme.Scheme)) -> TEnv {
 }
 
 pub fn resolve(env: TEnv, name: String) -> Result(scheme.Scheme, Nil) {
-  let TEnv(values, _, _, _, _) = env
-  dict.get(values, name)
+  let TEnv(values, tcons, _, _, _) = env
+  case dict.get(values, name) {
+    Ok(scheme_) -> Ok(scheme_)
+    Error(_) ->
+      case dict.get(tcons, name) {
+        Ok(#(free, cargs, cres)) -> {
+          let carg_types =
+            list.map(cargs, fn(field) {
+              let #(_label, t) = field
+              t
+            })
+          Ok(scheme.Forall(
+            set.from_list(free),
+            types.tfns(carg_types, cres, -1),
+          ))
+        }
+        Error(_) -> Error(Nil)
+      }
+  }
 }
 
 pub fn with_module(env: TEnv, alias: String, module_name: String) -> TEnv {

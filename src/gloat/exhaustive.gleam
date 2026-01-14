@@ -58,7 +58,7 @@ pub fn pattern_to_ex_pattern(
     g.PatternConcatenate(_, _prefix, _prefix_name, _rest_name) -> ExAny
     g.PatternList(_, items, tail) ->
       case type_ {
-        types.Tapp(types.Tcon("List", _), elem_type, _) -> {
+        types.Tapp(types.Tcon("List", _), [elem_type], _) -> {
           let base = case tail {
             option.None -> ExConstructor("[]", "List", [])
             option.Some(pat) -> pattern_to_ex_pattern(tenv, #(pat, type_))

@@ -157,11 +157,15 @@ pub fn add_deftype(
       name
     })
   let free_set = set.from_list(free)
-  let res =
-    list.fold(args, types.Tcon(name, loc), fn(inner, args) {
+  let arg_types =
+    list.map(args, fn(args) {
       let #(arg_name, arg_loc) = args
-      types.Tapp(inner, types.Tvar(arg_name, arg_loc), loc)
+      types.Tvar(arg_name, arg_loc)
     })
+  let res = case arg_types {
+    [] -> types.Tcon(name, loc)
+    _ -> types.Tapp(types.Tcon(name, loc), arg_types, loc)
+  }
 
   let env.TEnv(_values, _tcons, _types, aliases, _modules) = tenv
 
@@ -827,19 +831,19 @@ fn pat_bound(pat: g.Pattern) -> set.Set(String) {
 pub const tbool: types.Type = types.Tcon("Bool", -1)
 
 pub fn tmap(k: types.Type, v: types.Type) -> types.Type {
-  types.Tapp(types.Tapp(types.Tcon("Map", -1), k, -1), v, -1)
+  types.Tapp(types.Tcon("Map", -1), [k, v], -1)
 }
 
 pub fn toption(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("Option", -1), arg, -1)
+  types.Tapp(types.Tcon("Option", -1), [arg], -1)
 }
 
 pub fn tlist(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("List", -1), arg, -1)
+  types.Tapp(types.Tcon("List", -1), [arg], -1)
 }
 
 pub fn tset(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("Set", -1), arg, -1)
+  types.Tapp(types.Tcon("Set", -1), [arg], -1)
 }
 
 pub fn concrete(t: types.Type) -> scheme.Scheme {
@@ -890,7 +894,7 @@ pub fn builtin_env() -> env.TEnv {
           [
             types.Tapp(
               types.Tcon("List", -1),
-              types.Tapp(types.Tcon("trace-fmt", -1), k, -1),
+              [types.Tapp(types.Tcon("trace-fmt", -1), [k], -1)],
               -1,
             ),
           ],
@@ -990,10 +994,26 @@ pub fn builtin_env() -> env.TEnv {
       #(",", #(["a", "b"], [#(option.None, a), #(option.None, b)], t_pair(a, b))),
       #("True", #([], [], tbool)),
       #("False", #([], [], tbool)),
-      // #("Error", #(["a", "b"], [#(option.None, b)], types.Tapp(types.Tcon("Result", -1), a, -1))),
-      #("Ok", #([], [], types.Tcon("Result", -1))),
+      #("Nil", #([], [], types.Tcon("Nil", -1))),
+      #("Error", #(
+        ["a", "b"],
+        [#(option.None, a)],
+        types.Tapp(types.Tcon("Result", -1), [a, b], -1),
+      )),
+      #("Ok", #(
+        ["a", "b"],
+        [#(option.None, b)],
+        types.Tapp(types.Tcon("Result", -1), [a, b], -1),
+      )),
+      #("Some", #(
+        ["a"],
+        [#(option.None, a)],
+        types.Tapp(types.Tcon("Option", -1), [a], -1),
+      )),
+      #("None", #(["a"], [], types.Tapp(types.Tcon("Option", -1), [a], -1))),
     ]),
     dict.from_list([
+      #("Nil", #(0, set.new())),
       #("Int", #(0, set.new())),
       #("Float", #(0, set.new())),
       #("String", #(0, set.new())),

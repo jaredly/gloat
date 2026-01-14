@@ -51,16 +51,9 @@ fn infer_expr_inner(
       state.pure(types.Tcon("String", gleam_types.loc_from_span(span)))
 
     g.Variable(span, name) ->
-      case name {
-        "True" ->
-          state.pure(types.Tcon("Bool", gleam_types.loc_from_span(span)))
-        "False" ->
-          state.pure(types.Tcon("Bool", gleam_types.loc_from_span(span)))
-        _ ->
-          case env.resolve(tenv, name) {
-            Ok(scheme_) -> instantiate(scheme_, gleam_types.loc_from_span(span))
-            Error(_) -> runtime.fatal("Variable not found in scope: " <> name)
-          }
+      case env.resolve(tenv, name) {
+        Ok(scheme_) -> instantiate(scheme_, gleam_types.loc_from_span(span))
+        Error(_) -> runtime.fatal("Variable not found in scope: " <> name)
       }
 
     g.NegateInt(span, value) -> {
@@ -130,7 +123,7 @@ fn infer_expr_inner(
     g.List(span, items, tail) -> {
       let loc = gleam_types.loc_from_span(span)
       use elem_type <- state.bind(new_type_var("list_item", loc))
-      let list_type = types.Tapp(types.Tcon("List", loc), elem_type, loc)
+      let list_type = types.Tapp(types.Tcon("List", loc), [elem_type], loc)
       use item_types <- state.bind(
         state.map_list(items, fn(item) { infer_expr(tenv, item) }),
       )
@@ -989,7 +982,7 @@ pub fn infer_pattern(
     g.PatternList(span, items, tail) -> {
       let loc = gleam_types.loc_from_span(span)
       use elem_type <- state.bind(new_type_var("list_item", loc))
-      let list_type = types.Tapp(types.Tcon("List", loc), elem_type, loc)
+      let list_type = types.Tapp(types.Tcon("List", loc), [elem_type], loc)
       use inferred <- state.bind(
         state.map_list(items, fn(item) { infer_pattern(tenv, item) }),
       )
@@ -1316,13 +1309,28 @@ pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
             <> ")",
           )
       }
-    types.Tapp(t1a, a1, _), types.Tapp(t2a, a2, _) -> {
-      use _ignored <- state.bind(unify(t1a, t2a, loc))
-      use subst <- state.bind(state.get_subst())
-      let left = types.type_apply(subst, a1)
-      let right = types.type_apply(subst, a2)
-      unify(left, right, loc)
-    }
+    types.Tapp(t1a, a1, _), types.Tapp(t2a, a2, _) ->
+      case list.length(a1) == list.length(a2) {
+        True -> {
+          use _ignored <- state.bind(unify(t1a, t2a, loc))
+          use subst <- state.bind(state.get_subst())
+          let left = list.map(a1, fn(arg) { types.type_apply(subst, arg) })
+          let right = list.map(a2, fn(arg) { types.type_apply(subst, arg) })
+          state.each_list(list.zip(left, right), fn(pair) {
+            let #(l, r) = pair
+            unify(l, r, loc)
+          })
+        }
+        False ->
+          runtime.fatal(
+            "Incompatible type application arity "
+            <> int.to_string(loc)
+            <> " "
+            <> runtime.jsonify(t1)
+            <> " (vs) "
+            <> runtime.jsonify(t2),
+          )
+      }
     types.Tfn(args1, res1, _), types.Tfn(args2, res2, _) ->
       case list.length(args1) == list.length(args2) {
         True -> {
