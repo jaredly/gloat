@@ -208,38 +208,90 @@ fn infer_expr_inner(
 
     g.FieldAccess(span, container, label) -> {
       let loc = gleam_types.loc_from_span(span)
-      use target_type <- state.bind(infer_expr(tenv, container))
-      use applied_target <- state.bind(type_apply_state(target_type))
-      case applied_target {
-        types.Tvar(_, _) ->
-          runtime.fatal(
-            "Record field access requires known type " <> int.to_string(loc),
-          )
-        _ -> {
-          let #(tname, targs) = types.tcon_and_args(applied_target, [], loc)
-          let env.TEnv(_values, tcons, types_map, _aliases) = tenv
-          let constructors = case dict.get(types_map, tname) {
-            Ok(#(_arity, names)) -> set.to_list(names)
-            Error(_) -> runtime.fatal("Unknown type name " <> tname)
-          }
-          case constructors {
-            [cname] -> {
-              let #(free, cfields, _cres) = case dict.get(tcons, cname) {
-                Ok(value) -> value
-                Error(_) -> runtime.fatal("Unknown constructor " <> cname)
+      case container {
+        g.Variable(_span, module_name) ->
+          case env.resolve(tenv, module_name <> "/" <> label) {
+            Ok(scheme_) -> instantiate(scheme_, loc)
+            Error(_) -> {
+              use target_type <- state.bind(infer_expr(tenv, container))
+              use applied_target <- state.bind(type_apply_state(target_type))
+              case applied_target {
+                types.Tvar(_, _) ->
+                  runtime.fatal(
+                    "Record field access requires known type "
+                    <> int.to_string(loc),
+                  )
+                _ -> {
+                  let #(tname, targs) =
+                    types.tcon_and_args(applied_target, [], loc)
+                  let env.TEnv(_values, tcons, types_map, _aliases) = tenv
+                  let constructors = case dict.get(types_map, tname) {
+                    Ok(#(_arity, names)) -> set.to_list(names)
+                    Error(_) -> runtime.fatal("Unknown type name " <> tname)
+                  }
+                  case constructors {
+                    [cname] -> {
+                      let #(free, cfields, _cres) = case
+                        dict.get(tcons, cname)
+                      {
+                        Ok(value) -> value
+                        Error(_) ->
+                          runtime.fatal("Unknown constructor " <> cname)
+                      }
+                      let subst = dict.from_list(list.zip(free, targs))
+                      let field_type =
+                        types.type_apply(
+                          subst,
+                          lookup_constructor_field(label, cfields, loc),
+                        )
+                      state.pure(field_type)
+                    }
+                    _ ->
+                      runtime.fatal(
+                        "Record field access requires single-constructor type "
+                        <> tname,
+                      )
+                  }
+                }
               }
-              let subst = dict.from_list(list.zip(free, targs))
-              let field_type =
-                types.type_apply(
-                  subst,
-                  lookup_constructor_field(label, cfields, loc),
-                )
-              state.pure(field_type)
             }
-            _ ->
+          }
+        _ -> {
+          use target_type <- state.bind(infer_expr(tenv, container))
+          use applied_target <- state.bind(type_apply_state(target_type))
+          case applied_target {
+            types.Tvar(_, _) ->
               runtime.fatal(
-                "Record field access requires single-constructor type " <> tname,
+                "Record field access requires known type " <> int.to_string(loc),
               )
+            _ -> {
+              let #(tname, targs) = types.tcon_and_args(applied_target, [], loc)
+              let env.TEnv(_values, tcons, types_map, _aliases) = tenv
+              let constructors = case dict.get(types_map, tname) {
+                Ok(#(_arity, names)) -> set.to_list(names)
+                Error(_) -> runtime.fatal("Unknown type name " <> tname)
+              }
+              case constructors {
+                [cname] -> {
+                  let #(free, cfields, _cres) = case dict.get(tcons, cname) {
+                    Ok(value) -> value
+                    Error(_) -> runtime.fatal("Unknown constructor " <> cname)
+                  }
+                  let subst = dict.from_list(list.zip(free, targs))
+                  let field_type =
+                    types.type_apply(
+                      subst,
+                      lookup_constructor_field(label, cfields, loc),
+                    )
+                  state.pure(field_type)
+                }
+                _ ->
+                  runtime.fatal(
+                    "Record field access requires single-constructor type "
+                    <> tname,
+                  )
+              }
+            }
           }
         }
       }

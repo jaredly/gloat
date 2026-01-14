@@ -819,6 +819,20 @@ pub fn builtin_env() -> env.TEnv {
       ),
       #("unescapeString", concrete(types.tfns([tstring], tstring, -1))),
       #("int-to-string", concrete(types.tfns([types.tint], tstring, -1))),
+      #("int/to_string", concrete(types.tfns([types.tint], tstring, -1))),
+      #(
+        "float/to_string",
+        concrete(types.tfns([types.Tcon("float", -1)], tstring, -1)),
+      ),
+      #("string/append", concrete(types.tfns([tstring, tstring], tstring, -1))),
+      #(
+        "string/repeat",
+        concrete(types.tfns([tstring, types.tint], tstring, -1)),
+      ),
+      #(
+        "string/replace",
+        concrete(types.tfns([tstring, tstring, tstring], tstring, -1)),
+      ),
       #(
         "string-to-int",
         concrete(types.tfns([tstring], toption(types.tint), -1)),
@@ -893,6 +907,8 @@ pub fn builtin_env() -> env.TEnv {
     dict.from_list([
       #("()", #([], [], types.Tcon("()", -1))),
       #(",", #(["a", "b"], [#(option.None, a), #(option.None, b)], t_pair(a, b))),
+      #("True", #([], [], tbool)),
+      #("False", #([], [], tbool)),
     ]),
     dict.from_list([
       #("int", #(0, set.new())),

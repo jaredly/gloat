@@ -109,10 +109,7 @@ pub fn pattern_to_ex_pattern(
           case maybe_pat {
             option.None -> ExAny
             option.Some(pat) ->
-              pattern_to_ex_pattern(
-                tenv,
-                #(pat, types.type_apply(subst, ctype)),
-              )
+              pattern_to_ex_pattern(tenv, #(pat, types.type_apply(subst, ctype)))
           }
         })
 
@@ -121,12 +118,16 @@ pub fn pattern_to_ex_pattern(
   }
 }
 
-fn pattern_field(field: g.Field(g.Pattern)) -> #(option.Option(String), g.Pattern) {
+fn pattern_field(
+  field: g.Field(g.Pattern),
+) -> #(option.Option(String), g.Pattern) {
   case field {
     g.UnlabelledField(item) -> #(option.None, item)
     g.LabelledField(label, _loc, item) -> #(option.Some(label), item)
-    g.ShorthandField(label, loc) ->
-      #(option.Some(label), g.PatternVariable(loc, label))
+    g.ShorthandField(label, loc) -> #(
+      option.Some(label),
+      g.PatternVariable(loc, label),
+    )
   }
 }
 
@@ -146,10 +147,11 @@ fn align_constructor_fields(
       }
     })
   let labels_dict = dict.from_list(labels)
-  let unused = list.map(indexed, fn(entry) {
-    let #(idx, _field) = entry
-    idx
-  })
+  let unused =
+    list.map(indexed, fn(entry) {
+      let #(idx, _field) = entry
+      idx
+    })
 
   let #(assigned, remaining) =
     list.fold(fields, #(dict.new(), unused), fn(acc, field) {
@@ -160,11 +162,10 @@ fn align_constructor_fields(
           case dict.get(labels_dict, name) {
             Ok(idx) ->
               case list.contains(unused_inner, idx) {
-                True ->
-                  #(
-                    dict.insert(assigned, idx, pat),
-                    list.filter(unused_inner, fn(i) { i != idx }),
-                  )
+                True -> #(
+                  dict.insert(assigned, idx, pat),
+                  list.filter(unused_inner, fn(i) { i != idx }),
+                )
                 False ->
                   runtime.fatal(
                     "Duplicate field " <> name <> " " <> int.to_string(loc),
@@ -179,8 +180,7 @@ fn align_constructor_fields(
           case unused_inner {
             [] ->
               runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
-            [first, ..rest] ->
-              #(dict.insert(assigned, first, pat), rest)
+            [first, ..rest] -> #(dict.insert(assigned, first, pat), rest)
           }
       }
     })
@@ -305,7 +305,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
   case gid {
     "int" -> []
     "float" -> []
-    "bool" -> ["true", "false"]
+    "bool" -> ["True", "False"]
     "string" -> []
     "list" -> ["[]", "::"]
     "bitstring" -> []
