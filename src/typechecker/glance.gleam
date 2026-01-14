@@ -183,15 +183,26 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
 
     g.Case(span, subjects, clauses) ->
       case subjects {
-        [subject] ->
+        [] -> Error(Unsupported("case subject count"))
+        _ ->
           map2(
-            expression(subject),
-            result.all(list.map(clauses, clause_to_case)),
-            fn(target_expr, cases) {
+            result.all(list.map(subjects, expression)),
+            result.map(
+              result.all(
+                list.map(clauses, fn(clause) {
+                  clause_to_cases(clause, list.length(subjects), span)
+                }),
+              ),
+              list.flatten,
+            ),
+            fn(subject_exprs, cases) {
+              let target_expr = case subject_exprs {
+                [subject] -> subject
+                _ -> ast.Etuple(subject_exprs, loc_from_span(span))
+              }
               ast.Ematch(target_expr, cases, loc_from_span(span))
             },
           )
-        _ -> Error(Unsupported("case subject count"))
       }
 
     g.RecordUpdate(span, module, constructor, record, fields) ->
@@ -290,23 +301,51 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
   }
 }
 
-fn clause_to_case(
+fn clause_to_cases(
   clause: g.Clause,
-) -> Result(#(ast.Pat, option.Option(ast.Expr), ast.Expr), Error) {
+  subject_count: Int,
+  span: g.Span,
+) -> Result(List(#(ast.Pat, option.Option(ast.Expr), ast.Expr)), Error) {
   let g.Clause(patterns, guard, body) = clause
-  case patterns {
-    [[single]] ->
-      map2(
-        pattern(single),
-        map2(option_expr(guard), expression(body), fn(guard, body_expr) {
-          #(guard, body_expr)
-        }),
-        fn(pat, pair) {
-          let #(guard, body_expr) = pair
-          #(pat, guard, body_expr)
-        },
-      )
-    _ -> Error(Unsupported("case patterns"))
+  map2(
+    result.all(
+      list.map(patterns, fn(patterns) {
+        patterns_to_pat(patterns, subject_count, span)
+      }),
+    ),
+    map2(option_expr(guard), expression(body), fn(guard, body_expr) {
+      #(guard, body_expr)
+    }),
+    fn(pats, guard_body) {
+      let #(guard, body_expr) = guard_body
+      list.map(pats, fn(pat) { #(pat, guard, body_expr) })
+    },
+  )
+}
+
+fn patterns_to_pat(
+  patterns: List(g.Pattern),
+  subject_count: Int,
+  span: g.Span,
+) -> Result(ast.Pat, Error) {
+  case subject_count {
+    1 ->
+      case patterns {
+        [single] -> pattern(single)
+        _ -> Error(Unsupported("case patterns"))
+      }
+    _ ->
+      case patterns {
+        [] -> Error(Unsupported("case patterns"))
+        _ ->
+          case list.length(patterns) == subject_count {
+            True ->
+              result.map(result.all(list.map(patterns, pattern)), fn(pats) {
+                ast.Ptuple(pats, loc_from_span(span))
+              })
+            False -> Error(Unsupported("case patterns"))
+          }
+      }
   }
 }
 
