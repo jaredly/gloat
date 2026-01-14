@@ -2,8 +2,8 @@ import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/set
-import typechecker/scheme
-import typechecker/types
+import gloat/scheme
+import gloat/types
 
 pub type TEnv {
   TEnv(

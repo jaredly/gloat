@@ -5,13 +5,13 @@ import gleam/list
 import gleam/option
 import gleam/set
 import gleam/string
-import typechecker/env
-import typechecker/gleam_types
-import typechecker/infer
-import typechecker/runtime
-import typechecker/scheme
-import typechecker/state
-import typechecker/types
+import gloat/env
+import gloat/gleam_types
+import gloat/infer
+import gloat/runtime
+import gloat/scheme
+import gloat/state
+import gloat/types
 
 pub fn add_def(
   tenv: env.TEnv,

@@ -1,10 +1,10 @@
 import glance as g
-import typechecker/builtins
-import typechecker/env
-import typechecker/infer
-import typechecker/scheme
-import typechecker/state
-import typechecker/types
+import gloat/builtins
+import gloat/env
+import gloat/infer
+import gloat/scheme
+import gloat/state
+import gloat/types
 
 pub type Expr =
   g.Expression

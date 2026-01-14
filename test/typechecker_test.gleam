@@ -1,8 +1,8 @@
 import glance
 import gleeunit
+import gloat
+import gloat/env
 import test_panic
-import typechecker
-import typechecker/env
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -32,19 +32,19 @@ pub fn infer_case_list_pattern_test() {
 pub fn infer_from_glance_const_test() {
   let code = "\nconst answer = 42\n"
   let scheme = infer_scheme_from_glance(code, "answer")
-  assert typechecker.scheme_to_string(scheme) == "int"
+  assert gloat.scheme_to_string(scheme) == "int"
 }
 
 pub fn infer_from_glance_identity_test() {
   let code = "\npub fn id(x) { x }\n"
   let scheme = infer_scheme_from_glance(code, "id")
-  assert typechecker.scheme_to_string(scheme) == "forall x:1 : (fn [x:1] x:1)"
+  assert gloat.scheme_to_string(scheme) == "forall x:1 : (fn [x:1] x:1)"
 }
 
 pub fn infer_from_glance_pair_test() {
   let code = "\npub fn pair(a, b) { #(a, b) }\n"
   let scheme = infer_scheme_from_glance(code, "pair")
-  assert typechecker.scheme_to_string(scheme)
+  assert gloat.scheme_to_string(scheme)
     == "forall a:1 b:2 : (fn [a:1 b:2] (, a:1 b:2))"
 }
 
@@ -163,6 +163,21 @@ pub fn labelled_function_args_shorthand_test() {
   assert process(code, "top") == "int"
 }
 
+pub fn import_alias_qualified_test() {
+  let code = "import gleam/string as s\nconst top = s.append(\"a\", \"b\")"
+  assert process(code, "top") == "string"
+}
+
+pub fn import_unqualified_value_test() {
+  let code = "import gleam/string.{append}\nconst top = append(\"a\", \"b\")"
+  assert process(code, "top") == "string"
+}
+
+pub fn import_unknown_value_error_test() {
+  let code = "import gleam/string.{nope}\nconst top = nope(\"a\")"
+  assert test_panic.catches_panic(fn() { process(code, "top") })
+}
+
 pub fn labelled_constructor_args_test() {
   let code =
     "type User { User(name: String, age: Int) }\nconst top = User(age: 1, name: \"A\")"
@@ -239,12 +254,12 @@ pub fn record_update_from_glance_test() {
 }
 
 fn process(code, name) {
-  typechecker.scheme_to_string(infer_scheme_from_glance(code, name))
+  gloat.scheme_to_string(infer_scheme_from_glance(code, name))
 }
 
-fn infer_scheme_from_glance(code: String, name: String) -> typechecker.Scheme {
+fn infer_scheme_from_glance(code: String, name: String) -> gloat.Scheme {
   let assert Ok(parsed) = glance.module(code)
-  let env_ = typechecker.add_module(typechecker.builtin_env(), parsed)
+  let env_ = gloat.add_module(gloat.builtin_env(), parsed)
   case env.resolve(env_, name) {
     Ok(scheme) -> scheme
     Error(_) -> panic as "definition not found in env"

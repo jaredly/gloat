@@ -5,10 +5,10 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
-import typechecker/env
-import typechecker/runtime
-import typechecker/state
-import typechecker/types
+import gloat/env
+import gloat/runtime
+import gloat/state
+import gloat/types
 
 pub type ExPattern {
   ExAny

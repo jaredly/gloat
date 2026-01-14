@@ -5,8 +5,8 @@ import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
-import typechecker
-import typechecker/env
+import gloat
+import gloat/env
 
 pub fn main() {
   case start_arguments() {
@@ -30,8 +30,13 @@ fn infer_source(src: String) {
   case glance.module(src) {
     Error(error) -> io.println_error("Parse error: " <> string.inspect(error))
     Ok(parsed) -> {
-      let glance.Module(_imports, _custom_types, _type_aliases, constants, functions) =
-        parsed
+      let glance.Module(
+        _imports,
+        _custom_types,
+        _type_aliases,
+        constants,
+        functions,
+      ) = parsed
       let names =
         list.append(
           list.map(constants, fn(defn) {
@@ -42,21 +47,26 @@ fn infer_source(src: String) {
           }),
           list.map(functions, fn(defn) {
             let glance.Definition(_attrs, function) = defn
-            let glance.Function(_span, name, _publicity, _parameters, _return, _body) =
-              function
+            let glance.Function(
+              _span,
+              name,
+              _publicity,
+              _parameters,
+              _return,
+              _body,
+            ) = function
             name
           }),
         )
       case names {
         [] -> io.println("No top-level definitions found.")
         _ -> {
-          let env_ = typechecker.add_module(typechecker.builtin_env(), parsed)
+          let env_ = gloat.add_module(gloat.builtin_env(), parsed)
           let inferred =
             result.all(
               list.map(names, fn(name) {
                 case env.resolve(env_, name) {
-                  Ok(scheme) ->
-                    Ok(#(name, typechecker.scheme_to_string(scheme)))
+                  Ok(scheme) -> Ok(#(name, gloat.scheme_to_string(scheme)))
                   Error(_) -> Error("Definition not found in env: " <> name)
                 }
               }),

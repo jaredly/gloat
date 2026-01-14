@@ -5,13 +5,13 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
-import typechecker/env
-import typechecker/exhaustive
-import typechecker/gleam_types
-import typechecker/runtime
-import typechecker/scheme
-import typechecker/state
-import typechecker/types
+import gloat/env
+import gloat/exhaustive
+import gloat/gleam_types
+import gloat/runtime
+import gloat/scheme
+import gloat/state
+import gloat/types
 
 pub fn infer_expr(tenv: env.TEnv, expr: g.Expression) -> state.State(types.Type) {
   use old_subst <- state.bind(state.reset_subst(dict.new()))

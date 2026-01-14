@@ -2,7 +2,7 @@ import glance as g
 import gleam/list
 import gleam/option
 import gleam/result
-import typechecker/types
+import gloat/types
 
 pub type Error {
   Unsupported(String)

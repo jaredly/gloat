@@ -1,1 +1,25 @@
-["^ ","~:classpath",["~#set",[]],"~:project-hash","","~:project-root","/Users/jared/clone/sites/typechecker","~:settings-hash","99914b932bd37a50b983c5e7c90ae93b","~:kondo-config-hash","80847ce652d1c9040ebf32965eb4f31dcdeaf029b7a1818c8a670feb8a55b16e","~:dependency-scheme","zipfile","~:analysis",null,"~:analysis-checksums",["^ "],"~:project-analysis-type","~:project-and-full-dependencies","~:version",13,"~:stubs-generation-namespaces",["^1",[]]]
+[
+    "^ ",
+    "~:classpath",
+    ["~#set", []],
+    "~:project-hash",
+    "",
+    "~:project-root",
+    "/Users/jared/clone/sites/gloat",
+    "~:settings-hash",
+    "99914b932bd37a50b983c5e7c90ae93b",
+    "~:kondo-config-hash",
+    "80847ce652d1c9040ebf32965eb4f31dcdeaf029b7a1818c8a670feb8a55b16e",
+    "~:dependency-scheme",
+    "zipfile",
+    "~:analysis",
+    null,
+    "~:analysis-checksums",
+    ["^ "],
+    "~:project-analysis-type",
+    "~:project-and-full-dependencies",
+    "~:version",
+    13,
+    "~:stubs-generation-namespaces",
+    ["^1", []]
+]

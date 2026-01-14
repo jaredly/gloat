@@ -2,7 +2,7 @@ import gleam/dict
 import gleam/list
 import gleam/set
 import gleam/string
-import typechecker/runtime
+import gloat/runtime
 
 pub type Type {
   Tvar(String, Int)
