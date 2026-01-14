@@ -339,9 +339,104 @@ fn infer_block(
       infer_block(tenv, rest, loc)
     }
 
-    [g.Use(_span, _patterns, _function), ..] ->
-      runtime.fatal("Use statement not supported " <> int.to_string(loc))
+    [g.Use(span, patterns, function), ..rest] ->
+      infer_use(tenv, span, patterns, function, rest, loc)
   }
+}
+
+fn infer_use(
+  tenv: env.TEnv,
+  _span: g.Span,
+  patterns: List(g.UsePattern),
+  function: g.Expression,
+  rest: List(g.Statement),
+  loc: Int,
+) -> state.State(types.Type) {
+  use args <- state.bind(infer_use_patterns(tenv, patterns, loc))
+  let #(arg_types, scope) = args
+  use result_var <- state.bind(new_type_var("use_result", loc))
+  let callback_type = types.Tfn(arg_types, result_var, loc)
+  use _ignored <- state.bind(infer_use_function(
+    tenv,
+    function,
+    callback_type,
+    result_var,
+    loc,
+  ))
+  use scope_applied <- state.bind(scope_apply_state(scope))
+  let bound_env = env.with_scope(tenv, scope_applied)
+  use rest_type <- state.bind(infer_block(bound_env, rest, loc))
+  use _ignored2 <- state.bind(unify(result_var, rest_type, loc))
+  type_apply_state(rest_type)
+}
+
+fn infer_use_function(
+  tenv: env.TEnv,
+  function: g.Expression,
+  callback_type: types.Type,
+  result_var: types.Type,
+  loc: Int,
+) -> state.State(Nil) {
+  case function {
+    g.Call(_call_span, target, arguments) -> {
+      let args = list.map(arguments, fn(field) { field_expr(field) })
+      let exprs =
+        list.map(args, fn(arg) {
+          let #(_label, expr) = arg
+          expr
+        })
+      use target_type <- state.bind(infer_expr_inner(tenv, target))
+      use arg_types <- state.bind(
+        state.map_list(exprs, fn(expr) {
+          use arg_tenv <- state.bind(tenv_apply_state(tenv))
+          infer_expr_inner(arg_tenv, expr)
+        }),
+      )
+      use target_type_applied <- state.bind(type_apply_state(target_type))
+      unify(
+        target_type_applied,
+        types.Tfn(list.append(arg_types, [callback_type]), result_var, loc),
+        loc,
+      )
+    }
+    _ -> {
+      use target_type <- state.bind(infer_expr_inner(tenv, function))
+      use target_type_applied <- state.bind(type_apply_state(target_type))
+      unify(
+        target_type_applied,
+        types.Tfn([callback_type], result_var, loc),
+        loc,
+      )
+    }
+  }
+}
+
+fn infer_use_patterns(
+  tenv: env.TEnv,
+  patterns: List(g.UsePattern),
+  loc: Int,
+) -> state.State(#(List(types.Type), dict.Dict(String, scheme.Scheme))) {
+  use inferred <- state.bind(
+    state.map_list(patterns, fn(pattern) {
+      let g.UsePattern(pat, annotation) = pattern
+      use tuple <- state.bind(infer_pattern(tenv, pat))
+      let #(pat_type, scope) = tuple
+      use _ignored <- state.bind(case annotation {
+        option.Some(type_expr) ->
+          case gleam_types.type_(type_expr) {
+            Ok(type_) -> unify(type_, pat_type, loc)
+            Error(_) ->
+              runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+          }
+        option.None -> state.pure(Nil)
+      })
+      state.pure(#(pat_type, scope))
+    }),
+  )
+  let #(types_, scopes) = list.unzip(inferred)
+  let scope =
+    list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
+  state.pure(#(types_, scope))
 }
 
 fn infer_assignment(
@@ -388,14 +483,14 @@ fn infer_call(
 ) -> state.State(types.Type) {
   let loc = gleam_types.loc_from_span(span)
   let args = list.map(arguments, fn(field) { field_expr(field) })
-  case
+  let has_labels =
     list.any(args, fn(arg) {
       let #(label, _expr) = arg
       label != option.None
     })
-  {
-    True -> infer_constructor_call(tenv, loc, function, args)
-    False -> {
+  case has_labels, constructor_name(tenv, function) {
+    True, option.Some(_) -> infer_constructor_call(tenv, loc, function, args)
+    _, _ -> {
       let exprs =
         list.map(args, fn(arg) {
           let #(_label, expr) = arg
@@ -416,6 +511,27 @@ fn infer_call(
         loc,
       ))
       type_apply_state(result_var)
+    }
+  }
+}
+
+fn constructor_name(
+  tenv: env.TEnv,
+  function: g.Expression,
+) -> option.Option(String) {
+  let name = case function {
+    g.Variable(_span, name) -> option.Some(name)
+    g.FieldAccess(_span, g.Variable(_, _module), name) -> option.Some(name)
+    _ -> option.None
+  }
+  case name {
+    option.None -> option.None
+    option.Some(name) -> {
+      let env.TEnv(_values, tcons, _types, _aliases) = tenv
+      case dict.get(tcons, name) {
+        Ok(_) -> option.Some(name)
+        Error(_) -> option.None
+      }
     }
   }
 }
@@ -1118,7 +1234,10 @@ pub fn instantiate(scheme_: scheme.Scheme, loc: Int) -> state.State(types.Type) 
 }
 
 pub fn unify(t1: types.Type, t2: types.Type, loc: Int) -> state.State(Nil) {
-  case t1, t2 {
+  use subst <- state.bind(state.get_subst())
+  let left = types.type_apply(subst, t1)
+  let right = types.type_apply(subst, t2)
+  case left, right {
     types.Tvar(var, _), t -> var_bind(var, t, loc)
     t, types.Tvar(var, _) -> var_bind(var, t, loc)
     types.Tcon(a, _), types.Tcon(b, _) ->

@@ -58,8 +58,7 @@ pub fn mutual_recursion_test() {
 }
 
 pub fn mutual_recursion_oorder_test() {
-  let code =
-    "fn even(x) { x + odd(x) }\nconst x = \"hi\"\nfn odd(v) { v - 1 }"
+  let code = "fn even(x) { x + odd(x) }\nconst x = \"hi\"\nfn odd(v) { v - 1 }"
   assert process(code, "even") == "(fn [int] int)"
 }
 
@@ -108,9 +107,75 @@ pub fn fn_capture_from_glance_test() {
   assert process(code, "top") == "(fn [int] int)"
 }
 
-pub fn case_guard_from_glance_test() {
+pub fn use_statement_test() {
+  let code = "fn with(x, f) { f(x) }\nconst top = { use y <- with(1)\n y }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_multiple_patterns_test() {
   let code =
-    "\nconst top = case 1 {\n  x if x > 0 -> x\n  _ -> 0\n}\n"
+    "fn with2(x, y, f) { f(x, y) }\nconst top = { use a, b <- with2(1, 2)\n a + b }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_annotation_test() {
+  let code = "fn with(x, f) { f(x) }\nconst top = { use y: Int <- with(1)\n y }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_direct_function_test() {
+  let code = "fn wrap(f) { f(1) }\nconst top = { use y <- wrap\n y }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_tuple_pattern_test() {
+  let code =
+    "fn with_pair(f) { f(#(1, 2)) }\nconst top = { use #(a, b) <- with_pair\n a + b }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_list_pattern_test() {
+  let code =
+    "fn with_list(f) { f([1, 2, 3]) }\nconst top = { use [a, b, .._] <- with_list\n a + b }"
+  assert process(code, "top") == "int"
+}
+
+pub fn use_statement_bitstring_pattern_test() {
+  let code =
+    "fn with_bits(f) { f(<<1, 2>>) }\nconst top = { use <<a, b>> <- with_bits\n a + b }"
+  assert process(code, "top") == "int"
+}
+
+pub fn labelled_function_args_test() {
+  let code = "fn add(a, b) { a + b }\nconst top = add(b: 2, a: 1)"
+  assert process(code, "top") == "int"
+}
+
+pub fn labelled_function_args_mixed_test() {
+  let code = "fn add(a, b, c) { a + b + c }\nconst top = add(1, c: 3, b: 2)"
+  assert process(code, "top") == "int"
+}
+
+pub fn labelled_function_args_shorthand_test() {
+  let code =
+    "fn add(a, b) { a + b }\nconst a = 1\nconst b = 2\nconst top = add(a:, b:)"
+  assert process(code, "top") == "int"
+}
+
+pub fn labelled_constructor_args_test() {
+  let code =
+    "type User { User(name: String, age: Int) }\nconst top = User(age: 1, name: \"A\")"
+  assert process(code, "top") == "User"
+}
+
+pub fn labelled_constructor_args_shorthand_test() {
+  let code =
+    "type User { User(name: String, age: Int) }\nconst name = \"A\"\nconst age = 1\nconst top = User(name:, age:)"
+  assert process(code, "top") == "User"
+}
+
+pub fn case_guard_from_glance_test() {
+  let code = "\nconst top = case 1 {\n  x if x > 0 -> x\n  _ -> 0\n}\n"
   assert process(code, "top") == "int"
 }
 
