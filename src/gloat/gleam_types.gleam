@@ -17,7 +17,15 @@ pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
         _ -> name
       }
       let qualified = case module {
-        option.None -> resolved
+        option.None ->
+          case env.type_exists(tenv, resolved) {
+            True -> resolved
+            False ->
+              case env.resolve_type_name(tenv, resolved) {
+                Ok(name) -> name
+                Error(_) -> resolved
+              }
+          }
         option.Some(module_name) ->
           case env.resolve_module(tenv, module_name) {
             Ok(module_key) -> module_key <> "/" <> resolved

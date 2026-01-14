@@ -218,6 +218,7 @@ fn infer_expr_inner(
                     _aliases,
                     _modules,
                     _params,
+                    _type_names,
                   ) = tenv
                   case dict.get(types_map, tname) {
                     Error(_) -> is.error("Unknown type name " <> tname, span)
@@ -272,6 +273,7 @@ fn infer_expr_inner(
                 _aliases,
                 _modules,
                 _params,
+                _type_names,
               ) = tenv
               case dict.get(types_map, tname) {
                 Error(_) -> is.error("Unknown type name " <> tname, span)
@@ -588,7 +590,15 @@ fn constructor_name(
   case name {
     option.None -> option.None
     option.Some(name) -> {
-      let env.TEnv(_values, tcons, _types, _aliases, _modules, _params) = tenv
+      let env.TEnv(
+        _values,
+        tcons,
+        _types,
+        _aliases,
+        _modules,
+        _params,
+        _type_names,
+      ) = tenv
       case dict.get(tcons, name) {
         Ok(_) -> option.Some(name)
         Error(_) -> option.None
@@ -1383,7 +1393,8 @@ pub fn instantiate_tcon(
   name: String,
   span: g.Span,
 ) -> is.InferState(#(List(#(option.Option(String), types.Type)), types.Type)) {
-  let env.TEnv(_values, tcons, _types, _aliases, _modules, _params) = tenv
+  let env.TEnv(_values, tcons, _types, _aliases, _modules, _params, _type_names) =
+    tenv
   case dict.get(tcons, name) {
     Error(_) -> is.error("Unknown type constructor: " <> name, span)
     Ok(#(free, cargs, cres)) -> {

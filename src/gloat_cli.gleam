@@ -215,8 +215,15 @@ fn module_exports_env(
   result.try(
     qualified_values(module_env, module_key, exported, type_name_map),
     fn(values) {
-      let env.TEnv(_values, tcons, types, aliases, _modules, _params) =
-        module_env
+      let env.TEnv(
+        _values,
+        tcons,
+        types,
+        aliases,
+        _modules,
+        _params,
+        _type_names,
+      ) = module_env
       let tcons_filtered =
         filter_dict(tcons, constructor_names)
         |> qualify_tcons(module_key, type_name_map)
@@ -234,6 +241,7 @@ fn module_exports_env(
         aliases_filtered,
         dict.new(),
         params,
+        dict.new(),
       ))
     },
   )

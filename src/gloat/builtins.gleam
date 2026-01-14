@@ -166,6 +166,7 @@ pub fn add_typealias(
     dict.from_list([#(name, #(free, alias_type))]),
     dict.new(),
     dict.new(),
+    dict.new(),
   )
 }
 
@@ -199,7 +200,8 @@ pub fn add_deftype(
       )
   }
 
-  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params) = tenv
+  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params, _type_names) =
+    tenv
 
   let parsed_constrs =
     list.map(constrs, fn(args) {
@@ -257,7 +259,7 @@ pub fn add_deftype(
       }),
     )
 
-  env.TEnv(values, tcons, types_map, dict.new(), dict.new(), params)
+  env.TEnv(values, tcons, types_map, dict.new(), dict.new(), params, dict.new())
 }
 
 pub fn add_module(
@@ -314,33 +316,61 @@ fn add_imports(
     module
   fold_defs(imports, env.empty(), fn(acc, defn) {
     let g.Definition(_attrs, import_) = defn
-    let g.Import(span, module_name, alias, _types, values) = import_
+    let g.Import(span, module_name, alias, type_imports, values) = import_
     let base = module_key(module_name)
     let acc_with_module = case alias {
       option.None -> env.with_module(acc, base, base)
       option.Some(g.Named(name)) -> env.with_module(acc, name, base)
       option.Some(g.Discarded(_)) -> acc
     }
-    fold_defs(values, acc_with_module, fn(acc2, value) {
-      let g.UnqualifiedImport(name, alias) = value
-      let target = case alias {
-        option.None -> name
-        option.Some(alias_name) -> alias_name
-      }
-      let qualified = base <> "/" <> name
-      case env.resolve(tenv, qualified) {
-        Ok(scheme_) -> {
-          let acc3 = env.with_type(acc2, target, scheme_)
-          let acc4 = case env.resolve_params(tenv, qualified) {
-            Ok(params) -> env.with_type_params(acc3, target, params)
-            Error(_) -> acc3
-          }
-          Ok(acc4)
+    result.try(
+      fold_defs(type_imports, acc_with_module, fn(acc2, type_import) {
+        let g.UnqualifiedImport(name, alias) = type_import
+        let target = case alias {
+          option.None -> name
+          option.Some(alias_name) -> alias_name
         }
-        Error(_) ->
-          Error(type_error.new("Unknown import value " <> qualified, span))
-      }
-    })
+        let qualified = base <> "/" <> name
+        let env.TEnv(
+          _values,
+          _tcons,
+          types_map,
+          aliases,
+          _modules,
+          _params,
+          _tn,
+        ) = tenv
+        case
+          dict.has_key(types_map, qualified) || dict.has_key(aliases, qualified)
+        {
+          True -> Ok(env.with_type_name(acc2, target, qualified))
+          False ->
+            Error(type_error.new("Unknown import type " <> qualified, span))
+        }
+      }),
+      fn(acc2) {
+        fold_defs(values, acc2, fn(acc3, value) {
+          let g.UnqualifiedImport(name, alias) = value
+          let target = case alias {
+            option.None -> name
+            option.Some(alias_name) -> alias_name
+          }
+          let qualified = base <> "/" <> name
+          case env.resolve(tenv, qualified) {
+            Ok(scheme_) -> {
+              let acc4 = env.with_type(acc3, target, scheme_)
+              let acc5 = case env.resolve_params(tenv, qualified) {
+                Ok(params) -> env.with_type_params(acc4, target, params)
+                Error(_) -> acc4
+              }
+              Ok(acc5)
+            }
+            Error(_) ->
+              Error(type_error.new("Unknown import value " <> qualified, span))
+          }
+        })
+      },
+    )
   })
 }
 
@@ -1363,6 +1393,7 @@ pub fn builtin_env() -> env.TEnv {
       #("Map", #(2, set.new())),
       #("Set", #(1, set.new())),
     ]),
+    dict.new(),
     dict.new(),
     dict.new(),
     dict.new(),
