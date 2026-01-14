@@ -990,6 +990,8 @@ pub fn builtin_env() -> env.TEnv {
       #(",", #(["a", "b"], [#(option.None, a), #(option.None, b)], t_pair(a, b))),
       #("True", #([], [], tbool)),
       #("False", #([], [], tbool)),
+      // #("Error", #(["a", "b"], [#(option.None, b)], types.Tapp(types.Tcon("Result", -1), a, -1))),
+      #("Ok", #([], [], types.Tcon("Result", -1))),
     ]),
     dict.from_list([
       #("Int", #(0, set.new())),
@@ -997,6 +999,8 @@ pub fn builtin_env() -> env.TEnv {
       #("String", #(0, set.new())),
       #("Bool", #(0, set.new())),
       #("BitString", #(0, set.new())),
+      #("Result", #(2, set.from_list(["Error", "Ok"]))),
+      #("Option", #(1, set.from_list(["Some", "None"]))),
       #("List", #(1, set.new())),
       #("Map", #(2, set.new())),
       #("Set", #(1, set.new())),
