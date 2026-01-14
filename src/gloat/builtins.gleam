@@ -20,10 +20,14 @@ pub fn add_def(
   expr: g.Expression,
   annotation: option.Option(g.Type),
   loc: g.Span,
+  params: List(option.Option(String)),
 ) -> Result(env.TEnv, type_error.TypeError) {
   is.run_empty({
     use self <- is.bind(infer.new_type_var(name, types.unknown_span))
-    let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
+    let bound_env =
+      tenv
+      |> env.with_type(name, scheme.Forall(set.new(), self))
+      |> env.with_type_params(name, params)
     use type_ <- is.bind(infer.infer_expr(bound_env, expr))
     use _ignored_annotation <- is.bind(case annotation {
       option.Some(type_expr) ->
@@ -36,50 +40,70 @@ pub fn add_def(
     use self_applied <- is.bind(is.apply_with(types.type_apply, self))
     use _ignored <- is.bind(infer.unify(self_applied, type_, loc))
     use type_applied <- is.bind(is.apply_with(types.type_apply, type_))
-    is.ok(env.with_type(env.empty(), name, env.generalize(tenv, type_applied)))
+    is.ok(
+      env.empty()
+      |> env.with_type(name, env.generalize(tenv, type_applied))
+      |> env.with_type_params(name, params),
+    )
   })
 }
 
 pub fn add_defs(
   tenv: env.TEnv,
-  defns: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
+  defns: List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
 ) -> Result(env.TEnv, type_error.TypeError) {
   let names =
     list.map(defns, fn(args) {
-      let #(name, _, _, _, _) = args
+      let #(name, _, _, _, _, _) = args
       name
     })
   let locs =
     list.map(defns, fn(args) {
-      let #(_, _, _, _, loc) = args
+      let #(_, _, _, _, loc, _) = args
       loc
     })
   let annotations =
     list.map(defns, fn(args) {
-      let #(_, _, _, annotation, _) = args
+      let #(_, _, _, annotation, _, _) = args
       annotation
+    })
+  let params_list =
+    list.map(defns, fn(args) {
+      let #(_, _, _, _, _, params) = args
+      params
     })
 
   is.run_empty({
     use vbls <- is.bind(
       is.map_list(defns, fn(args) {
-        let #(name, _name_loc, _expr, _annotation, _loc) = args
+        let #(name, _name_loc, _expr, _annotation, _loc, _params) = args
         infer.new_type_var(name, types.unknown_span)
       }),
     )
     let bound_env =
       list.fold(
-        list.zip(names, list.map(vbls, fn(v) { scheme.Forall(set.new(), v) })),
+        list.zip(names, list.zip(vbls, params_list)),
         tenv,
         fn(acc, args) {
-          let #(name, vbl) = args
-          env.with_type(acc, name, vbl)
+          let #(name, #(vbl, params)) = args
+          acc
+          |> env.with_type(name, scheme.Forall(set.new(), vbl))
+          |> env.with_type_params(name, params)
         },
       )
 
     use types_ <- is.bind(
       is.map_list(defns, fn(args) {
-        let #(_, _, expr, _, _) = args
+        let #(_, _, expr, _, _, _) = args
         infer.infer_expr(bound_env, expr)
       }),
     )
@@ -109,10 +133,16 @@ pub fn add_defs(
       is.map_list(types_, fn(t) { is.apply_with(types.type_apply, t) }),
     )
     let new_env =
-      list.fold(list.zip(names, types_applied), env.empty(), fn(acc, args) {
-        let #(name, type_) = args
-        env.with_type(acc, name, env.generalize(tenv, type_))
-      })
+      list.fold(
+        list.zip(names, list.zip(types_applied, params_list)),
+        env.empty(),
+        fn(acc, args) {
+          let #(name, #(type_, params)) = args
+          acc
+          |> env.with_type(name, env.generalize(tenv, type_))
+          |> env.with_type_params(name, params)
+        },
+      )
     is.ok(new_env)
   })
 }
@@ -134,6 +164,7 @@ pub fn add_typealias(
     dict.new(),
     dict.new(),
     dict.from_list([#(name, #(free, alias_type))]),
+    dict.new(),
     dict.new(),
   )
 }
@@ -168,7 +199,7 @@ pub fn add_deftype(
       )
   }
 
-  let env.TEnv(_values, _tcons, _types, aliases, _modules) = tenv
+  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params) = tenv
 
   let parsed_constrs =
     list.map(constrs, fn(args) {
@@ -213,8 +244,20 @@ pub fn add_deftype(
       }),
     )
   let types_map = dict.from_list([#(name, #(list.length(args), type_names))])
+  let params =
+    dict.from_list(
+      list.map(parsed_constrs, fn(args) {
+        let #(cname, #(_free2, cargs, _cres)) = args
+        let labels =
+          list.map(cargs, fn(field) {
+            let #(label, _t) = field
+            label
+          })
+        #(cname, labels)
+      }),
+    )
 
-  env.TEnv(values, tcons, types_map, dict.new(), dict.new())
+  env.TEnv(values, tcons, types_map, dict.new(), dict.new(), params)
 }
 
 pub fn add_module(
@@ -286,7 +329,14 @@ fn add_imports(
       }
       let qualified = base <> "/" <> name
       case env.resolve(tenv, qualified) {
-        Ok(scheme_) -> Ok(env.with_type(acc2, target, scheme_))
+        Ok(scheme_) -> {
+          let acc3 = env.with_type(acc2, target, scheme_)
+          let acc4 = case env.resolve_params(tenv, qualified) {
+            Ok(params) -> env.with_type_params(acc3, target, params)
+            Error(_) -> acc3
+          }
+          Ok(acc4)
+        }
         Error(_) ->
           Error(type_error.new("Unknown import value " <> qualified, span))
       }
@@ -316,7 +366,16 @@ fn module_key(module_name: String) -> String {
 
 fn add_defs_grouped(
   tenv: env.TEnv,
-  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
+  defs: List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
 ) -> Result(env.TEnv, type_error.TypeError) {
   case defs {
     [] -> Ok(env.empty())
@@ -371,20 +430,46 @@ fn add_custom_type_def(
 
 fn constant_to_def(
   defn: g.Definition(g.Constant),
-) -> #(String, g.Span, g.Expression, option.Option(g.Type), g.Span) {
+) -> #(
+  String,
+  g.Span,
+  g.Expression,
+  option.Option(g.Type),
+  g.Span,
+  List(option.Option(String)),
+) {
   let g.Definition(_attrs, constant) = defn
   let g.Constant(span, name, _publicity, annotation, value) = constant
-  #(name, span, value, annotation, span)
+  #(name, span, value, annotation, span, [])
 }
 
 fn function_to_def(
   defn: g.Definition(g.Function),
 ) -> Result(
-  #(String, g.Span, g.Expression, option.Option(g.Type), g.Span),
+  #(
+    String,
+    g.Span,
+    g.Expression,
+    option.Option(g.Type),
+    g.Span,
+    List(option.Option(String)),
+  ),
   type_error.TypeError,
 ) {
   let g.Definition(attrs, function) = defn
   let g.Function(span, name, _publicity, parameters, return, body) = function
+  let params =
+    list.map(parameters, fn(param) {
+      let g.FunctionParameter(label, name, _type) = param
+      case label {
+        option.Some(label) -> option.Some(label)
+        option.None ->
+          option.Some(case name {
+            g.Discarded(name) -> name
+            g.Named(name) -> name
+          })
+      }
+    })
   case is_external(attrs) && body == [] {
     True -> {
       result.map(
@@ -396,6 +481,7 @@ fn function_to_def(
             g.Todo(span, option.None),
             option.Some(annotation),
             span,
+            params,
           )
         },
       )
@@ -407,7 +493,7 @@ fn function_to_def(
           g.FnParameter(name, type_)
         })
       let expr = g.Fn(span, fn_params, return, body)
-      Ok(#(name, span, expr, option.None, span))
+      Ok(#(name, span, expr, option.None, span, params))
     }
   }
 }
@@ -446,30 +532,70 @@ fn external_function_type(
 }
 
 type DefInfo =
-  #(String, g.Span, g.Expression, option.Option(g.Type), g.Span, Int)
+  #(
+    String,
+    g.Span,
+    g.Expression,
+    option.Option(g.Type),
+    g.Span,
+    List(option.Option(String)),
+    Int,
+  )
 
 fn group_mutual_defs(
-  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
-) -> List(List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span))) {
+  defs: List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
+) -> List(
+  List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
+) {
   let defs_in_order = list.reverse(defs)
   let infos = def_infos(defs_in_order)
   let groups = def_info_groups(infos)
   list.map(groups, fn(group) {
     list.map(group, fn(info) {
-      let #(name, name_loc, expr, annotation, loc, _idx) = info
-      #(name, name_loc, expr, annotation, loc)
+      let #(name, name_loc, expr, annotation, loc, params, _idx) = info
+      #(name, name_loc, expr, annotation, loc, params)
     })
   })
 }
 
 fn def_infos(
-  defs: List(#(String, g.Span, g.Expression, option.Option(g.Type), g.Span)),
+  defs: List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
 ) -> List(DefInfo) {
   let #(_idx, infos_rev) =
     list.fold(defs, #(0, []), fn(acc, def) {
       let #(idx, infos) = acc
-      let #(name, name_loc, expr, annotation, loc) = def
-      #(idx + 1, [#(name, name_loc, expr, annotation, loc, idx), ..infos])
+      let #(name, name_loc, expr, annotation, loc, params) = def
+      #(idx + 1, [
+        #(name, name_loc, expr, annotation, loc, params, idx),
+        ..infos
+      ])
     })
   list.reverse(infos_rev)
 }
@@ -504,12 +630,12 @@ fn def_info_groups(defs: List(DefInfo)) -> List(List(DefInfo)) {
 }
 
 fn def_name(def: DefInfo) -> String {
-  let #(name, _, _, _, _, _) = def
+  let #(name, _, _, _, _, _, _) = def
   name
 }
 
 fn def_expr(def: DefInfo) -> g.Expression {
-  let #(_, _, expr, _, _, _) = def
+  let #(_, _, expr, _, _, _, _) = def
   expr
 }
 
@@ -1237,6 +1363,7 @@ pub fn builtin_env() -> env.TEnv {
       #("Map", #(2, set.new())),
       #("Set", #(1, set.new())),
     ]),
+    dict.new(),
     dict.new(),
     dict.new(),
   )

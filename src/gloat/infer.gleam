@@ -211,8 +211,14 @@ fn infer_expr_inner(
                     is.from_result(types.tcon_and_args(applied_target, [], span)),
                   )
                   let #(tname, targs) = tcon
-                  let env.TEnv(_values, tcons, types_map, _aliases, _modules) =
-                    tenv
+                  let env.TEnv(
+                    _values,
+                    tcons,
+                    types_map,
+                    _aliases,
+                    _modules,
+                    _params,
+                  ) = tenv
                   case dict.get(types_map, tname) {
                     Error(_) -> is.error("Unknown type name " <> tname, span)
                     Ok(#(_arity, names)) -> {
@@ -259,7 +265,14 @@ fn infer_expr_inner(
                 is.from_result(types.tcon_and_args(applied_target, [], span)),
               )
               let #(tname, targs) = tcon
-              let env.TEnv(_values, tcons, types_map, _aliases, _modules) = tenv
+              let env.TEnv(
+                _values,
+                tcons,
+                types_map,
+                _aliases,
+                _modules,
+                _params,
+              ) = tenv
               case dict.get(types_map, tname) {
                 Error(_) -> is.error("Unknown type name " <> tname, span)
                 Ok(#(_arity, names)) -> {
@@ -328,7 +341,8 @@ fn infer_expr_inner(
         option.Some(type_expr) ->
           case gleam_types.type_(type_expr) {
             Ok(type_) -> unify(body_type, type_, span)
-            Error(_) -> is.error("Unsupported return annotation", span)
+            Error(gleam_types.Unsupported(name)) ->
+              is.error("Unsupported return annotation: " <> name, span)
           }
         option.None -> is.ok(Nil)
       })
@@ -574,7 +588,7 @@ fn constructor_name(
   case name {
     option.None -> option.None
     option.Some(name) -> {
-      let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
+      let env.TEnv(_values, tcons, _types, _aliases, _modules, _params) = tenv
       case dict.get(tcons, name) {
         Ok(_) -> option.Some(name)
         Error(_) -> option.None
@@ -887,29 +901,152 @@ fn infer_binary_operator(
       is.ok(types.Tcon("String", span))
     }
 
-    g.Pipe -> infer_expr(tenv, pipe_to_call(span, left, right))
+    g.Pipe -> infer_expr(tenv, pipe_to_call(tenv, span, left, right))
   }
 }
 
 fn pipe_to_call(
+  tenv: env.TEnv,
   span: g.Span,
   left: g.Expression,
   right: g.Expression,
 ) -> g.Expression {
   case right {
     g.Call(call_span, function, arguments) -> {
-      let piped = case split_at_unlabelled(arguments, []) {
-        Ok(#(prefix, rest)) ->
-          list.append(prefix, [g.UnlabelledField(left), ..rest])
+      let piped = g.UnlabelledField(left)
+      let piped_args = case split_at_unlabelled(arguments, []) {
+        Ok(#(prefix, rest)) -> list.append(prefix, [piped, ..rest])
         Error(_) ->
-          case arguments {
-            [] -> [g.UnlabelledField(left)]
-            [first, ..rest] -> [first, g.UnlabelledField(left), ..rest]
+          case insert_piped_by_labels(tenv, function, arguments, piped) {
+            Ok(piped_args) -> piped_args
+            Error(_) ->
+              case arguments {
+                [] -> [piped]
+                [first, ..rest] -> [first, piped, ..rest]
+              }
           }
       }
-      g.Call(call_span, function, piped)
+      g.Call(call_span, function, piped_args)
     }
     _ -> g.Call(span, right, [g.UnlabelledField(left)])
+  }
+}
+
+fn insert_piped_by_labels(
+  tenv: env.TEnv,
+  function: g.Expression,
+  arguments: List(g.Field(g.Expression)),
+  piped: g.Field(g.Expression),
+) -> Result(List(g.Field(g.Expression)), Nil) {
+  case resolve_call_params(tenv, function) {
+    Ok(params) -> {
+      let provided = provided_labels(arguments)
+      case missing_param_index(params, provided, 0) {
+        Ok(pipe_index) -> {
+          let label_map = label_index_map(params)
+          case split_at_param_index(arguments, label_map, pipe_index, []) {
+            Ok(#(prefix, rest)) -> Ok(list.append(prefix, [piped, ..rest]))
+            Error(_) -> Error(Nil)
+          }
+        }
+        Error(_) -> Error(Nil)
+      }
+    }
+    Error(_) -> Error(Nil)
+  }
+}
+
+fn resolve_call_params(
+  tenv: env.TEnv,
+  function: g.Expression,
+) -> Result(List(option.Option(String)), Nil) {
+  case function {
+    g.Variable(_span, name) -> env.resolve_params(tenv, name)
+    g.FieldAccess(_span, g.Variable(_, module_name), label) ->
+      case env.resolve_module(tenv, module_name) {
+        Ok(module_key) -> env.resolve_params(tenv, module_key <> "/" <> label)
+        Error(_) -> Error(Nil)
+      }
+    _ -> Error(Nil)
+  }
+}
+
+fn provided_labels(arguments: List(g.Field(g.Expression))) -> set.Set(String) {
+  list.fold(arguments, set.new(), fn(acc, field) {
+    case arg_label(field) {
+      option.Some(label) -> set.insert(acc, label)
+      option.None -> acc
+    }
+  })
+}
+
+fn missing_param_index(
+  params: List(option.Option(String)),
+  provided: set.Set(String),
+  index: Int,
+) -> Result(Int, Nil) {
+  case params {
+    [] -> Error(Nil)
+    [param, ..rest] ->
+      case param {
+        option.None -> Ok(index)
+        option.Some(label) ->
+          case set.contains(provided, label) {
+            True -> missing_param_index(rest, provided, index + 1)
+            False -> Ok(index)
+          }
+      }
+  }
+}
+
+fn label_index_map(
+  params: List(option.Option(String)),
+) -> dict.Dict(String, Int) {
+  let #(_idx, label_map) =
+    list.fold(params, #(0, dict.new()), fn(acc, param) {
+      let #(idx, map) = acc
+      let map2 = case param {
+        option.Some(label) -> dict.insert(map, label, idx)
+        option.None -> map
+      }
+      #(idx + 1, map2)
+    })
+  label_map
+}
+
+fn split_at_param_index(
+  arguments: List(g.Field(g.Expression)),
+  label_map: dict.Dict(String, Int),
+  pipe_index: Int,
+  acc: List(g.Field(g.Expression)),
+) -> Result(#(List(g.Field(g.Expression)), List(g.Field(g.Expression))), Nil) {
+  case arguments {
+    [] -> Ok(#(list.reverse(acc), []))
+    [first, ..rest] ->
+      case arg_label(first) {
+        option.Some(label) ->
+          case dict.get(label_map, label) {
+            Ok(label_index) ->
+              case label_index > pipe_index {
+                True -> Ok(#(list.reverse(acc), [first, ..rest]))
+                False ->
+                  split_at_param_index(rest, label_map, pipe_index, [
+                    first,
+                    ..acc
+                  ])
+              }
+            Error(_) -> Error(Nil)
+          }
+        option.None -> Error(Nil)
+      }
+  }
+}
+
+fn arg_label(field: g.Field(g.Expression)) -> option.Option(String) {
+  case field {
+    g.LabelledField(label, _loc, _item) -> option.Some(label)
+    g.ShorthandField(label, _loc) -> option.Some(label)
+    g.UnlabelledField(_) -> option.None
   }
 }
 
@@ -1246,7 +1383,7 @@ pub fn instantiate_tcon(
   name: String,
   span: g.Span,
 ) -> is.InferState(#(List(#(option.Option(String), types.Type)), types.Type)) {
-  let env.TEnv(_values, tcons, _types, _aliases, _modules) = tenv
+  let env.TEnv(_values, tcons, _types, _aliases, _modules, _params) = tenv
   case dict.get(tcons, name) {
     Error(_) -> is.error("Unknown type constructor: " <> name, span)
     Ok(#(free, cargs, cres)) -> {

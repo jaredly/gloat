@@ -5,6 +5,7 @@ import gleam/dynamic
 import gleam/int
 import gleam/io
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/set
 import gleam/string
@@ -209,16 +210,18 @@ fn module_exports_env(
   result.try(qualified_values(module_env, module_key, exported), fn(values) {
     let type_names = module_type_names(parsed)
     let alias_names = module_alias_names(parsed)
-    let env.TEnv(_values, tcons, types, aliases, _modules) = module_env
+    let env.TEnv(_values, tcons, types, aliases, _modules, _params) = module_env
     let tcons_filtered = filter_dict(tcons, constructor_names)
     let types_filtered = filter_dict(types, type_names)
     let aliases_filtered = filter_dict(aliases, alias_names)
+    let params = qualified_params(module_env, module_key, exported)
     Ok(env.TEnv(
       values,
       tcons_filtered,
       types_filtered,
       aliases_filtered,
       dict.new(),
+      params,
     ))
   })
 }
@@ -242,6 +245,19 @@ fn qualified_values(
     ),
     dict.from_list,
   )
+}
+
+fn qualified_params(
+  module_env: env.TEnv,
+  module_key: String,
+  names: List(String),
+) -> dict.Dict(String, List(option.Option(String))) {
+  list.fold(names, dict.new(), fn(acc, name) {
+    case env.resolve_params(module_env, name) {
+      Ok(params) -> dict.insert(acc, module_key <> "/" <> name, params)
+      Error(_) -> acc
+    }
+  })
 }
 
 fn module_value_names(parsed: glance.Module) -> List(String) {
