@@ -1,5 +1,6 @@
 import glance
 import gleeunit
+import test_panic
 import typechecker
 import typechecker/env
 
@@ -172,6 +173,29 @@ pub fn labelled_constructor_args_shorthand_test() {
   let code =
     "type User { User(name: String, age: Int) }\nconst name = \"A\"\nconst age = 1\nconst top = User(name:, age:)"
   assert process(code, "top") == "User"
+}
+
+pub fn labelled_constructor_missing_field_error_test() {
+  let code =
+    "type User { User(name: String, age: Int) }\nconst top = User(name: \"A\")"
+  assert test_panic.catches_panic(fn() { process(code, "top") })
+}
+
+pub fn labelled_constructor_unknown_field_error_test() {
+  let code =
+    "type User { User(name: String, age: Int) }\nconst top = User(foo: \"A\", age: 1)"
+  assert test_panic.catches_panic(fn() { process(code, "top") })
+}
+
+pub fn use_tuple_pattern_arity_error_test() {
+  let code =
+    "fn with_pair(f) { f(#(1, 2)) }\nconst top = { use #(a, b, c) <- with_pair\n a }"
+  assert test_panic.catches_panic(fn() { process(code, "top") })
+}
+
+pub fn labelled_function_args_type_error_test() {
+  let code = "fn add(a, b) { a + b }\nconst top = add(a: \"x\", b: 1)"
+  assert test_panic.catches_panic(fn() { process(code, "top") })
 }
 
 pub fn case_guard_from_glance_test() {
