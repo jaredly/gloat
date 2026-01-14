@@ -1,10 +1,13 @@
+import glance as g
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
-import typechecker/ast
 import typechecker/env
+import typechecker/gleam_types
 import typechecker/infer
+import typechecker/runtime
 import typechecker/scheme
 import typechecker/state
 import typechecker/types
@@ -13,13 +16,23 @@ pub fn add_def(
   tenv: env.TEnv,
   name: String,
   name_loc: Int,
-  expr: ast.Expr,
+  expr: g.Expression,
+  annotation: option.Option(g.Type),
   loc: Int,
 ) -> env.TEnv {
   state.run_empty({
     use self <- state.bind(infer.new_type_var(name, name_loc))
     let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
     use type_ <- state.bind(infer.infer_expr(bound_env, expr))
+    use _ignored_annotation <- state.bind(case annotation {
+      option.Some(type_expr) ->
+        case gleam_types.type_(type_expr) {
+          Ok(annot_type) -> infer.unify(type_, annot_type, loc)
+          Error(_) ->
+            runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+        }
+      option.None -> state.pure(Nil)
+    })
     use self_applied <- state.bind(state.apply_with(types.type_apply, self))
     use _ignored <- state.bind(infer.unify(self_applied, type_, loc))
     use type_applied <- state.bind(state.apply_with(types.type_apply, type_))
@@ -33,23 +46,28 @@ pub fn add_def(
 
 pub fn add_defs(
   tenv: env.TEnv,
-  defns: List(#(String, Int, ast.Expr, Int)),
+  defns: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
 ) -> env.TEnv {
   let names =
     list.map(defns, fn(args) {
-      let #(name, _, _, _) = args
+      let #(name, _, _, _, _) = args
       name
     })
   let locs =
     list.map(defns, fn(args) {
-      let #(_, _, _, loc) = args
+      let #(_, _, _, _, loc) = args
       loc
+    })
+  let annotations =
+    list.map(defns, fn(args) {
+      let #(_, _, _, annotation, _) = args
+      annotation
     })
 
   state.run_empty({
     use vbls <- state.bind(
       state.map_list(defns, fn(args) {
-        let #(name, name_loc, _expr, _loc) = args
+        let #(name, name_loc, _expr, _annotation, _loc) = args
         infer.new_type_var(name, name_loc)
       }),
     )
@@ -65,8 +83,22 @@ pub fn add_defs(
 
     use types_ <- state.bind(
       state.map_list(defns, fn(args) {
-        let #(_, _, expr, _) = args
+        let #(_, _, expr, _, _) = args
         infer.infer_expr(bound_env, expr)
+      }),
+    )
+    use _ignored_annotations <- state.bind(
+      state.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
+        let #(type_, #(annotation, loc)) = args
+        case annotation {
+          option.None -> state.pure(Nil)
+          option.Some(type_expr) ->
+            case gleam_types.type_(type_expr) {
+              Ok(annot_type) -> infer.unify(type_, annot_type, loc)
+              Error(_) ->
+                runtime.fatal("Unsupported annotation " <> int.to_string(loc))
+            }
+        }
       }),
     )
     use vbls_applied <- state.bind(
@@ -175,78 +207,38 @@ pub fn add_deftype(
   env.TEnv(values, tcons, types_map, dict.new())
 }
 
-pub fn add_stmt(tenv: env.TEnv, stmt: ast.Top) -> env.TEnv {
-  case stmt {
-    ast.Tdef(name, name_loc, expr, loc) ->
-      add_def(tenv, name, name_loc, expr, loc)
-    ast.Texpr(expr, _loc) ->
-      state.run_empty({
-        use _ignored <- state.bind(infer.infer_expr(tenv, expr))
-        state.pure(env.empty())
-      })
-    ast.Ttypealias(name, _name_loc, args, type_, _loc) ->
-      add_typealias(tenv, name, args, type_)
-    ast.Tdeftype(name, _name_loc, args, constrs, loc) ->
-      add_deftype(tenv, name, args, constrs, loc)
-  }
+pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+  let g.Module(_imports, custom_types, type_aliases, constants, functions) =
+    module
+  let alias_env =
+    list.fold(type_aliases, env.empty(), fn(acc, defn) {
+      env.merge(acc, add_typealias_def(tenv, defn))
+    })
+  let tenv_with_aliases = env.merge(tenv, alias_env)
+  let types_env =
+    list.fold(custom_types, env.empty(), fn(acc, defn) {
+      env.merge(acc, add_custom_type_def(tenv_with_aliases, defn))
+    })
+  let type_env = env.merge(alias_env, types_env)
+  let tenv_with_types = env.merge(tenv, type_env)
+  let defs =
+    list.append(
+      list.map(constants, constant_to_def),
+      list.map(functions, function_to_def),
+    )
+  let defs_env = add_defs_grouped(tenv_with_types, defs)
+  env.merge(tenv_with_types, defs_env)
 }
 
-pub fn split_stmts(
-  stmts: List(ast.Top),
-) -> #(List(#(String, Int, ast.Expr, Int)), List(ast.Top), List(ast.Top)) {
-  list.fold(stmts, #([], [], []), fn(acc, stmt) {
-    let #(defs, aliases, others) = acc
-    case stmt {
-      ast.Tdef(name, name_loc, body, loc) -> #(
-        [#(name, name_loc, body, loc), ..defs],
-        aliases,
-        others,
-      )
-      ast.Ttypealias(_, _, _, _, _) -> #(defs, [stmt, ..aliases], others)
-      _ -> #(defs, aliases, [stmt, ..others])
-    }
-  })
-}
-
-pub fn add_stmts(tenv: env.TEnv, stmts: List(ast.Top)) -> env.TEnv {
-  add_stmts_loop(tenv, stmts, env.empty(), [])
-}
-
-fn add_stmts_loop(
+fn add_defs_grouped(
   tenv: env.TEnv,
-  stmts: List(ast.Top),
-  acc: env.TEnv,
-  pending_defs: List(#(String, Int, ast.Expr, Int)),
+  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
 ) -> env.TEnv {
-  case stmts {
-    [] -> flush_defs(tenv, acc, pending_defs)
-    [stmt, ..rest] ->
-      case stmt {
-        ast.Tdef(name, name_loc, expr, loc) ->
-          add_stmts_loop(tenv, rest, acc, [
-            #(name, name_loc, expr, loc),
-            ..pending_defs
-          ])
-        _ -> {
-          let acc = flush_defs(tenv, acc, pending_defs)
-          let merged = env.merge(tenv, acc)
-          let acc = env.merge(acc, add_stmt(merged, stmt))
-          add_stmts_loop(tenv, rest, acc, [])
-        }
-      }
-  }
-}
-
-fn flush_defs(
-  tenv: env.TEnv,
-  acc: env.TEnv,
-  pending_defs: List(#(String, Int, ast.Expr, Int)),
-) -> env.TEnv {
-  case pending_defs {
-    [] -> acc
+  case defs {
+    [] -> env.empty()
     _ -> {
-      let def_groups = group_mutual_defs(list.reverse(pending_defs))
-      list.fold(def_groups, acc, fn(acc, group) {
+      let def_groups = group_mutual_defs(defs)
+      list.fold(def_groups, env.empty(), fn(acc, group) {
         let merged = env.merge(tenv, acc)
         env.merge(acc, add_defs(merged, group))
       })
@@ -254,29 +246,92 @@ fn flush_defs(
   }
 }
 
+fn add_typealias_def(
+  tenv: env.TEnv,
+  defn: g.Definition(g.TypeAlias),
+) -> env.TEnv {
+  let g.Definition(_attrs, type_alias) = defn
+  let g.TypeAlias(span, name, _publicity, parameters, aliased) = type_alias
+  let loc = gleam_types.loc_from_span(span)
+  let args = list.map(parameters, fn(param) { #(param, loc) })
+  let type_ = case gleam_types.type_(aliased) {
+    Ok(type_) -> type_
+    Error(_) -> runtime.fatal("Unsupported alias type " <> int.to_string(loc))
+  }
+  add_typealias(tenv, name, args, type_)
+}
+
+fn add_custom_type_def(
+  tenv: env.TEnv,
+  defn: g.Definition(g.CustomType),
+) -> env.TEnv {
+  let g.Definition(_attrs, custom_type) = defn
+  let g.CustomType(span, name, _publicity, _opaque, parameters, variants) =
+    custom_type
+  let loc = gleam_types.loc_from_span(span)
+  let args = list.map(parameters, fn(param) { #(param, loc) })
+  let constrs =
+    list.map(variants, fn(variant) {
+      let g.Variant(cname, fields, _attributes) = variant
+      let field_types = case gleam_types.variant_fields(fields) {
+        Ok(field_types) -> field_types
+        Error(_) ->
+          runtime.fatal("Unsupported constructor fields " <> int.to_string(loc))
+      }
+      #(cname, loc, field_types, loc)
+    })
+  add_deftype(tenv, name, args, constrs, loc)
+}
+
+fn constant_to_def(
+  defn: g.Definition(g.Constant),
+) -> #(String, Int, g.Expression, option.Option(g.Type), Int) {
+  let g.Definition(_attrs, constant) = defn
+  let g.Constant(span, name, _publicity, annotation, value) = constant
+  let loc = gleam_types.loc_from_span(span)
+  #(name, loc, value, annotation, loc)
+}
+
+fn function_to_def(
+  defn: g.Definition(g.Function),
+) -> #(String, Int, g.Expression, option.Option(g.Type), Int) {
+  let g.Definition(_attrs, function) = defn
+  let g.Function(span, name, _publicity, parameters, return, body) = function
+  let fn_params =
+    list.map(parameters, fn(param) {
+      let g.FunctionParameter(_label, name, type_) = param
+      g.FnParameter(name, type_)
+    })
+  let expr = g.Fn(span, fn_params, return, body)
+  let loc = gleam_types.loc_from_span(span)
+  #(name, loc, expr, option.None, loc)
+}
+
 type DefInfo =
-  #(String, Int, ast.Expr, Int, Int)
+  #(String, Int, g.Expression, option.Option(g.Type), Int, Int)
 
 fn group_mutual_defs(
-  defs: List(#(String, Int, ast.Expr, Int)),
-) -> List(List(#(String, Int, ast.Expr, Int))) {
+  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
+) -> List(List(#(String, Int, g.Expression, option.Option(g.Type), Int))) {
   let defs_in_order = list.reverse(defs)
   let infos = def_infos(defs_in_order)
   let groups = def_info_groups(infos)
   list.map(groups, fn(group) {
     list.map(group, fn(info) {
-      let #(name, name_loc, expr, loc, _idx) = info
-      #(name, name_loc, expr, loc)
+      let #(name, name_loc, expr, annotation, loc, _idx) = info
+      #(name, name_loc, expr, annotation, loc)
     })
   })
 }
 
-fn def_infos(defs: List(#(String, Int, ast.Expr, Int))) -> List(DefInfo) {
+fn def_infos(
+  defs: List(#(String, Int, g.Expression, option.Option(g.Type), Int)),
+) -> List(DefInfo) {
   let #(_idx, infos_rev) =
     list.fold(defs, #(0, []), fn(acc, def) {
       let #(idx, infos) = acc
-      let #(name, name_loc, expr, loc) = def
-      #(idx + 1, [#(name, name_loc, expr, loc, idx), ..infos])
+      let #(name, name_loc, expr, annotation, loc) = def
+      #(idx + 1, [#(name, name_loc, expr, annotation, loc, idx), ..infos])
     })
   list.reverse(infos_rev)
 }
@@ -311,12 +366,12 @@ fn def_info_groups(defs: List(DefInfo)) -> List(List(DefInfo)) {
 }
 
 fn def_name(def: DefInfo) -> String {
-  let #(name, _, _, _, _) = def
+  let #(name, _, _, _, _, _) = def
   name
 }
 
-fn def_expr(def: DefInfo) -> ast.Expr {
-  let #(_, _, expr, _, _) = def
+fn def_expr(def: DefInfo) -> g.Expression {
+  let #(_, _, expr, _, _, _) = def
   expr
 }
 
@@ -432,26 +487,39 @@ fn reverse_graph(
   })
 }
 
-fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
+fn expr_free(expr: g.Expression, bound: set.Set(String)) -> set.Set(String) {
   case expr {
-    ast.Eprim(_, _) -> set.new()
-    ast.Evar(name, _) ->
-      case set.contains(bound, name) {
-        True -> set.new()
-        False -> set.insert(set.new(), name)
+    g.Int(_, _) -> set.new()
+    g.Float(_, _) -> set.new()
+    g.String(_, _) -> set.new()
+    g.Variable(_, name) ->
+      case name {
+        "True" -> set.new()
+        "False" -> set.new()
+        _ ->
+          case set.contains(bound, name) {
+            True -> set.new()
+            False -> set.insert(set.new(), name)
+          }
       }
-    ast.Estr(_, templates, _) ->
-      list.fold(templates, set.new(), fn(acc, item) {
-        let #(expr, _, _) = item
-        set.union(acc, expr_free(expr, bound))
-      })
-    ast.Equot(_, _) -> set.new()
-    ast.Etuple(items, _) ->
+    g.NegateInt(_, value) -> expr_free(value, bound)
+    g.NegateBool(_, value) -> expr_free(value, bound)
+    g.Block(_, statements) -> expr_free_block(statements, bound)
+    g.Panic(_, message) ->
+      case message {
+        option.None -> set.new()
+        option.Some(expr) -> expr_free(expr, bound)
+      }
+    g.Todo(_, message) ->
+      case message {
+        option.None -> set.new()
+        option.Some(expr) -> expr_free(expr, bound)
+      }
+    g.Tuple(_, items) ->
       list.fold(items, set.new(), fn(acc, item) {
         set.union(acc, expr_free(item, bound))
       })
-    ast.EtupleIndex(target, _index, _) -> expr_free(target, bound)
-    ast.Elist(items, tail, _) -> {
+    g.List(_, items, tail) -> {
       let items_set =
         list.fold(items, set.new(), fn(acc, item) {
           set.union(acc, expr_free(item, bound))
@@ -461,12 +529,20 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         option.Some(expr) -> set.union(items_set, expr_free(expr, bound))
       }
     }
-    ast.Ebitstring(segments, _) ->
+    g.BitString(_, segments) ->
       list.fold(segments, set.new(), fn(acc, segment) {
-        let #(expr, _opts) = segment
-        set.union(acc, expr_free(expr, bound))
+        let #(expr, options) = segment
+        let segment_free = expr_free(expr, bound)
+        let options_free =
+          list.fold(options, set.new(), fn(acc2, opt) {
+            case opt {
+              g.SizeValueOption(expr) -> set.union(acc2, expr_free(expr, bound))
+              _ -> acc2
+            }
+          })
+        set.union(acc, set.union(segment_free, options_free))
       })
-    ast.Eecho(value, message, _) -> {
+    g.Echo(_, value, message) -> {
       let acc = case value {
         option.None -> set.new()
         option.Some(expr) -> expr_free(expr, bound)
@@ -476,70 +552,154 @@ fn expr_free(expr: ast.Expr, bound: set.Set(String)) -> set.Set(String) {
         option.Some(expr) -> set.union(acc, expr_free(expr, bound))
       }
     }
-    ast.Erecord(_module, _name, fields, _) ->
-      list.fold(fields, set.new(), fn(acc, field) {
-        let #(_label, expr) = field
-        set.union(acc, expr_free(expr, bound))
-      })
-    ast.ErecordUpdate(_module, _name, record, fields, _) -> {
+    g.RecordUpdate(_, _module, _name, record, fields) -> {
       let record_free = expr_free(record, bound)
       list.fold(fields, record_free, fn(acc, field) {
-        let #(_label, expr) = field
+        let g.RecordUpdateField(label, item) = field
+        let expr = case item {
+          option.Some(expr) -> expr
+          option.None -> g.Variable(g.Span(0, 0), label)
+        }
         set.union(acc, expr_free(expr, bound))
       })
     }
-    ast.Efield(expr, _label, _) -> expr_free(expr, bound)
-    ast.Elambda(args, body, _) -> {
+    g.FieldAccess(_, container, _label) -> expr_free(container, bound)
+    g.Fn(_, params, _return, body) -> {
       let bound_args =
-        list.fold(args, set.new(), fn(acc, pat) {
-          set.union(acc, pat_bound(pat))
+        list.fold(params, set.new(), fn(acc, param) {
+          let g.FnParameter(name, _type_) = param
+          set.union(acc, bound_for_name(name))
         })
-      expr_free(body, set.union(bound, bound_args))
+      expr_free_block(body, set.union(bound, bound_args))
     }
-    ast.Eapp(target, args, _) -> {
-      let target_free = expr_free(target, bound)
-      list.fold(args, target_free, fn(acc, arg) {
-        set.union(acc, expr_free(arg, bound))
+    g.Call(_, function, arguments) -> {
+      let function_free = expr_free(function, bound)
+      list.fold(arguments, function_free, fn(acc, arg) {
+        case arg {
+          g.UnlabelledField(item) -> set.union(acc, expr_free(item, bound))
+          g.LabelledField(_label, _loc, item) ->
+            set.union(acc, expr_free(item, bound))
+          g.ShorthandField(label, _loc) ->
+            case set.contains(bound, label) {
+              True -> acc
+              False -> set.insert(acc, label)
+            }
+        }
       })
     }
-    ast.Elet(bindings, body, _) -> {
-      let #(bound2, free) =
-        list.fold(bindings, #(bound, set.new()), fn(acc, binding) {
-          let #(bound_now, free_now) = acc
-          let #(pat, value) = binding
-          let free_value = expr_free(value, bound_now)
-          let bound_next = set.union(bound_now, pat_bound(pat))
-          #(bound_next, set.union(free_now, free_value))
+    g.TupleIndex(_, tuple, _index) -> expr_free(tuple, bound)
+    g.FnCapture(_, _label, function, args_before, args_after) -> {
+      let fn_free = expr_free(function, bound)
+      let before_free =
+        list.fold(args_before, set.new(), fn(acc, arg) {
+          set.union(acc, expr_free_field(arg, bound))
         })
-      set.union(free, expr_free(body, bound2))
+      let after_free =
+        list.fold(args_after, set.new(), fn(acc, arg) {
+          set.union(acc, expr_free_field(arg, bound))
+        })
+      set.union(fn_free, set.union(before_free, after_free))
     }
-    ast.Ematch(target, cases, _) -> {
-      let target_free = expr_free(target, bound)
-      let cases_free =
-        list.fold(cases, set.new(), fn(acc, item) {
-          let #(pat, guard, body) = item
-          let bound_case = set.union(bound, pat_bound(pat))
-          let guard_free = case guard {
-            option.None -> set.new()
-            option.Some(expr) -> expr_free(expr, bound_case)
-          }
-          let body_free = expr_free(body, bound_case)
-          set.union(acc, set.union(guard_free, body_free))
+    g.Case(_, subjects, clauses) -> {
+      let subjects_free =
+        list.fold(subjects, set.new(), fn(acc, subject) {
+          set.union(acc, expr_free(subject, bound))
         })
-      set.union(target_free, cases_free)
+      let clauses_free =
+        list.fold(clauses, set.new(), fn(acc, clause) {
+          let g.Clause(patterns, guard, body) = clause
+          let clause_free =
+            list.fold(patterns, set.new(), fn(acc2, patterns) {
+              let bound_case =
+                list.fold(patterns, bound, fn(acc3, pat) {
+                  set.union(acc3, pat_bound(pat))
+                })
+              let guard_free = case guard {
+                option.None -> set.new()
+                option.Some(expr) -> expr_free(expr, bound_case)
+              }
+              let body_free = expr_free(body, bound_case)
+              set.union(acc2, set.union(guard_free, body_free))
+            })
+          set.union(acc, clause_free)
+        })
+      set.union(subjects_free, clauses_free)
+    }
+    g.BinaryOperator(_, _op, left, right) -> {
+      let left_free = expr_free(left, bound)
+      set.union(left_free, expr_free(right, bound))
     }
   }
 }
 
-fn pat_bound(pat: ast.Pat) -> set.Set(String) {
+fn expr_free_block(
+  statements: List(g.Statement),
+  bound: set.Set(String),
+) -> set.Set(String) {
+  case statements {
+    [] -> set.new()
+    [g.Expression(expr)] -> expr_free(expr, bound)
+    [g.Expression(expr), ..rest] ->
+      set.union(expr_free(expr, bound), expr_free_block(rest, bound))
+    [g.Assignment(_, _kind, pat, _annotation, value), ..rest] -> {
+      let free_value = expr_free(value, bound)
+      let bound_next = set.union(bound, pat_bound(pat))
+      set.union(free_value, expr_free_block(rest, bound_next))
+    }
+    [g.Assert(_, expr, message), ..rest] -> {
+      let free_expr = expr_free(expr, bound)
+      let free_msg = case message {
+        option.None -> set.new()
+        option.Some(expr) -> expr_free(expr, bound)
+      }
+      set.union(set.union(free_expr, free_msg), expr_free_block(rest, bound))
+    }
+    [g.Use(_, patterns, function), ..rest] -> {
+      let free_fn = expr_free(function, bound)
+      let bound_next = set.union(bound, use_patterns_bound(patterns))
+      set.union(free_fn, expr_free_block(rest, bound_next))
+    }
+  }
+}
+
+fn expr_free_field(
+  field: g.Field(g.Expression),
+  bound: set.Set(String),
+) -> set.Set(String) {
+  case field {
+    g.UnlabelledField(item) -> expr_free(item, bound)
+    g.LabelledField(_label, _loc, item) -> expr_free(item, bound)
+    g.ShorthandField(label, _loc) ->
+      case set.contains(bound, label) {
+        True -> set.new()
+        False -> set.insert(set.new(), label)
+      }
+  }
+}
+
+fn use_patterns_bound(patterns: List(g.UsePattern)) -> set.Set(String) {
+  list.fold(patterns, set.new(), fn(acc, pattern) {
+    let g.UsePattern(pat, _annotation) = pattern
+    set.union(acc, pat_bound(pat))
+  })
+}
+
+fn bound_for_name(name: g.AssignmentName) -> set.Set(String) {
+  case name {
+    g.Named(name) -> set.insert(set.new(), name)
+    g.Discarded(_) -> set.new()
+  }
+}
+
+fn pat_bound(pat: g.Pattern) -> set.Set(String) {
   case pat {
-    ast.Pany(_) -> set.new()
-    ast.Pvar(name, _) -> set.insert(set.new(), name)
-    ast.Ptuple(items, _) ->
+    g.PatternDiscard(_, _) -> set.new()
+    g.PatternVariable(_, name) -> set.insert(set.new(), name)
+    g.PatternTuple(_, items) ->
       list.fold(items, set.new(), fn(acc, item) {
         set.union(acc, pat_bound(item))
       })
-    ast.Plist(items, tail, _) -> {
+    g.PatternList(_, items, tail) -> {
       let items_set =
         list.fold(items, set.new(), fn(acc, item) {
           set.union(acc, pat_bound(item))
@@ -549,29 +709,37 @@ fn pat_bound(pat: ast.Pat) -> set.Set(String) {
         option.Some(pat) -> set.union(items_set, pat_bound(pat))
       }
     }
-    ast.Pas(name, pat, _) -> set.insert(pat_bound(pat), name)
-    ast.Pconcat(_prefix, prefix_name, rest_name, _) -> {
+    g.PatternAssignment(_, pat, name) -> set.insert(pat_bound(pat), name)
+    g.PatternConcatenate(_, _prefix, prefix_name, rest_name) -> {
       let acc = case prefix_name {
         option.None -> set.new()
-        option.Some(name) -> set.insert(set.new(), name)
+        option.Some(name) ->
+          case name {
+            g.Named(name) -> set.insert(set.new(), name)
+            g.Discarded(_) -> set.new()
+          }
       }
       case rest_name {
-        option.None -> acc
-        option.Some(name) -> set.insert(acc, name)
+        g.Named(name) -> set.insert(acc, name)
+        g.Discarded(_) -> acc
       }
     }
-    ast.Pbitstring(segments, _) ->
+    g.PatternBitString(_, segments) ->
       list.fold(segments, set.new(), fn(acc, segment) {
         let #(pat, _opts) = segment
         set.union(acc, pat_bound(pat))
       })
-    ast.Pcon(_, _, args, _) ->
+    g.PatternVariant(_, _module, _name, args, _spread) ->
       list.fold(args, set.new(), fn(acc, arg) {
-        let #(_label, pat) = arg
-        set.union(acc, pat_bound(pat))
+        case arg {
+          g.UnlabelledField(pat) -> set.union(acc, pat_bound(pat))
+          g.LabelledField(_label, _loc, pat) -> set.union(acc, pat_bound(pat))
+          g.ShorthandField(label, _loc) -> set.insert(acc, label)
+        }
       })
-    ast.Pstr(_, _) -> set.new()
-    ast.Pprim(_, _) -> set.new()
+    g.PatternString(_, _) -> set.new()
+    g.PatternInt(_, _) -> set.new()
+    g.PatternFloat(_, _) -> set.new()
   }
 }
 
@@ -623,6 +791,7 @@ pub fn builtin_env() -> env.TEnv {
   env.TEnv(
     dict.from_list([
       #("+", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
+      #("<>", concrete(types.tfns([tstring, tstring], tstring, -1))),
       #("-", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
       #("negate", concrete(types.tfns([types.tint], types.tint, -1))),
       #(">", concrete(types.tfns([types.tint, types.tint], tbool, -1))),

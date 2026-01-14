@@ -1,10 +1,10 @@
+import glance as g
 import gleam/dict
 import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
-import typechecker/ast
 import typechecker/env
 import typechecker/runtime
 import typechecker/state
@@ -19,7 +19,7 @@ pub type ExPattern {
 pub fn check_exhaustiveness(
   tenv: env.TEnv,
   target_type: types.Type,
-  patterns: List(ast.Pat),
+  patterns: List(g.Pattern),
   loc: Int,
 ) -> state.State(Nil) {
   use applied_target <- state.bind(type_apply_state(target_type))
@@ -36,28 +36,27 @@ pub fn check_exhaustiveness(
 
 pub fn pattern_to_ex_pattern(
   tenv: env.TEnv,
-  pat_and_type: #(ast.Pat, types.Type),
+  pat_and_type: #(g.Pattern, types.Type),
 ) -> ExPattern {
   let #(pattern, type_) = pat_and_type
   case pattern {
-    ast.Pvar(_, _) -> ExAny
-    ast.Pany(_) -> ExAny
-    ast.Pstr(str, _) -> ExConstructor(str, "string", [])
-    ast.Pprim(ast.Pint(v, _), _) -> ExConstructor(int.to_string(v), "int", [])
-    ast.Pprim(ast.Pfloat(v, _), _) ->
-      ExConstructor(float.to_string(v), "float", [])
-    ast.Pprim(ast.Pbool(v, _), _) ->
-      ExConstructor(
-        case v {
-          True -> "true"
-          False -> "false"
-        },
-        "bool",
-        [],
-      )
-    ast.Pas(_name, pat, _loc) -> pattern_to_ex_pattern(tenv, #(pat, type_))
-    ast.Pconcat(_prefix, _prefix_name, _rest_name, _loc) -> ExAny
-    ast.Plist(items, tail, loc) ->
+    g.PatternVariable(_, _) -> ExAny
+    g.PatternDiscard(_, _) -> ExAny
+    g.PatternString(_, str) -> ExConstructor(str, "string", [])
+    g.PatternInt(_, value) ->
+      case int.parse(value) {
+        Ok(v) -> ExConstructor(int.to_string(v), "int", [])
+        Error(_) -> runtime.fatal("Invalid int pattern")
+      }
+    g.PatternFloat(_, value) ->
+      case float.parse(value) {
+        Ok(v) -> ExConstructor(float.to_string(v), "float", [])
+        Error(_) -> runtime.fatal("Invalid float pattern")
+      }
+    g.PatternAssignment(_span, pat, _name) ->
+      pattern_to_ex_pattern(tenv, #(pat, type_))
+    g.PatternConcatenate(_, _prefix, _prefix_name, _rest_name) -> ExAny
+    g.PatternList(_, items, tail) ->
       case type_ {
         types.Tapp(types.Tcon("list", _), elem_type, _) -> {
           let base = case tail {
@@ -69,14 +68,11 @@ pub fn pattern_to_ex_pattern(
             ExConstructor("::", "list", [head, acc])
           })
         }
-        _ ->
-          runtime.fatal(
-            "List pattern with non-list type " <> int.to_string(loc),
-          )
+        _ -> runtime.fatal("List pattern with non-list type")
       }
-    ast.Pbitstring(_segments, _loc) ->
+    g.PatternBitString(_, _segments) ->
       ExConstructor("bitstring", "bitstring", [])
-    ast.Ptuple(items, loc) ->
+    g.PatternTuple(_span, items) ->
       case type_ {
         types.Ttuple(targs, _) ->
           case list.length(items) == list.length(targs) {
@@ -89,12 +85,12 @@ pub fn pattern_to_ex_pattern(
                   pattern_to_ex_pattern(tenv, #(pat, t))
                 }),
               )
-            False ->
-              runtime.fatal("Tuple arity mismatch " <> int.to_string(loc))
+            False -> runtime.fatal("Tuple arity mismatch")
           }
         _ -> runtime.fatal("Tuple pattern with non-tuple type")
       }
-    ast.Pcon(name, _name_loc, fields, loc) -> {
+    g.PatternVariant(span, _module, name, arguments, with_spread) -> {
+      let loc = span_loc(span)
       let #(tname, targs) = types.tcon_and_args(type_, [], loc)
       let env.TEnv(_values, tcons, _types, _aliases) = tenv
 
@@ -104,12 +100,20 @@ pub fn pattern_to_ex_pattern(
       }
 
       let subst = dict.from_list(list.zip(free_names, targs))
-      let aligned_fields = align_constructor_fields(fields, cargs, loc)
+      let fields = list.map(arguments, fn(field) { pattern_field(field) })
+      let aligned = align_constructor_fields(fields, cargs, loc, with_spread)
       let converted_args =
-        list.map(aligned_fields, fn(pair) {
-          let #(pat, cfield) = pair
-          let #(_label, type_) = cfield
-          pattern_to_ex_pattern(tenv, #(pat, types.type_apply(subst, type_)))
+        list.map(list.zip(aligned, cargs), fn(pair) {
+          let #(maybe_pat, cfield) = pair
+          let #(_label, ctype) = cfield
+          case maybe_pat {
+            option.None -> ExAny
+            option.Some(pat) ->
+              pattern_to_ex_pattern(
+                tenv,
+                #(pat, types.type_apply(subst, ctype)),
+              )
+          }
         })
 
       ExConstructor(name, tname, converted_args)
@@ -117,65 +121,101 @@ pub fn pattern_to_ex_pattern(
   }
 }
 
-fn align_constructor_fields(
-  fields: List(#(option.Option(String), ast.Pat)),
-  cfields: List(#(option.Option(String), types.Type)),
-  loc: Int,
-) -> List(#(ast.Pat, #(option.Option(String), types.Type))) {
-  case fields {
-    [] -> []
-    [field, ..rest] -> {
-      let #(label, pat) = field
-      case label {
-        option.None ->
-          case cfields {
-            [] ->
-              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
-            [cfield, ..ctail] -> [
-              #(pat, cfield),
-              ..align_constructor_fields(rest, ctail, loc)
-            ]
-          }
-        option.Some(name) -> {
-          let #(maybe, remaining) = find_field(name, cfields, [])
-          case maybe {
-            option.None ->
-              runtime.fatal(
-                "Unknown field " <> name <> " " <> int.to_string(loc),
-              )
-            option.Some(cfield) -> [
-              #(pat, cfield),
-              ..align_constructor_fields(rest, remaining, loc)
-            ]
-          }
-        }
-      }
-    }
+fn pattern_field(field: g.Field(g.Pattern)) -> #(option.Option(String), g.Pattern) {
+  case field {
+    g.UnlabelledField(item) -> #(option.None, item)
+    g.LabelledField(label, _loc, item) -> #(option.Some(label), item)
+    g.ShorthandField(label, loc) ->
+      #(option.Some(label), g.PatternVariable(loc, label))
   }
 }
 
-fn find_field(
-  name: String,
+fn align_constructor_fields(
+  fields: List(#(option.Option(String), g.Pattern)),
   cfields: List(#(option.Option(String), types.Type)),
-  acc: List(#(option.Option(String), types.Type)),
-) -> #(
-  option.Option(#(option.Option(String), types.Type)),
-  List(#(option.Option(String), types.Type)),
-) {
-  case cfields {
-    [] -> #(option.None, list.reverse(acc))
-    [field, ..rest] -> {
-      let #(label, _type) = field
+  loc: Int,
+  allow_missing: Bool,
+) -> List(option.Option(g.Pattern)) {
+  let indexed = index_list(cfields)
+  let labels =
+    list.filter_map(indexed, fn(entry) {
+      let #(idx, #(label, _type)) = entry
       case label {
-        option.Some(label_name) ->
-          case label_name == name {
-            True -> #(option.Some(field), list.append(list.reverse(acc), rest))
-            False -> find_field(name, rest, [field, ..acc])
-          }
-        option.None -> find_field(name, rest, [field, ..acc])
+        option.Some(name) -> Ok(#(name, idx))
+        option.None -> Error(Nil)
       }
-    }
+    })
+  let labels_dict = dict.from_list(labels)
+  let unused = list.map(indexed, fn(entry) {
+    let #(idx, _field) = entry
+    idx
+  })
+
+  let #(assigned, remaining) =
+    list.fold(fields, #(dict.new(), unused), fn(acc, field) {
+      let #(assigned, unused_inner) = acc
+      let #(label, pat) = field
+      case label {
+        option.Some(name) ->
+          case dict.get(labels_dict, name) {
+            Ok(idx) ->
+              case list.contains(unused_inner, idx) {
+                True ->
+                  #(
+                    dict.insert(assigned, idx, pat),
+                    list.filter(unused_inner, fn(i) { i != idx }),
+                  )
+                False ->
+                  runtime.fatal(
+                    "Duplicate field " <> name <> " " <> int.to_string(loc),
+                  )
+              }
+            Error(_) ->
+              runtime.fatal(
+                "Unknown field " <> name <> " " <> int.to_string(loc),
+              )
+          }
+        option.None ->
+          case unused_inner {
+            [] ->
+              runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+            [first, ..rest] ->
+              #(dict.insert(assigned, first, pat), rest)
+          }
+      }
+    })
+
+  case remaining {
+    [] -> Nil
+    _ ->
+      case allow_missing {
+        True -> Nil
+        False ->
+          runtime.fatal("Constructor field mismatch " <> int.to_string(loc))
+      }
   }
+
+  list.map(indexed, fn(entry) {
+    let #(idx, _field) = entry
+    case dict.get(assigned, idx) {
+      Ok(pat) -> option.Some(pat)
+      Error(_) -> option.None
+    }
+  })
+}
+
+fn index_list(items: List(a)) -> List(#(Int, a)) {
+  let #(_idx, acc) =
+    list.fold(items, #(0, []), fn(acc, item) {
+      let #(idx, items) = acc
+      #(idx + 1, [#(idx, item), ..items])
+    })
+  list.reverse(acc)
+}
+
+fn span_loc(span: g.Span) -> Int {
+  let g.Span(start, _end) = span
+  start
 }
 
 fn any_list(arity: Int) -> List(ExPattern) {

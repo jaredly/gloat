@@ -1,27 +1,19 @@
 import glance as g
-import typechecker/ast
 import typechecker/builtins
 import typechecker/env
-import typechecker/glance as tc_glance
 import typechecker/infer
 import typechecker/scheme
 import typechecker/state
 import typechecker/types
 
-pub type Loc =
-  ast.Loc
-
-pub type Prim =
-  ast.Prim
-
-pub type Top =
-  ast.Top
-
 pub type Expr =
-  ast.Expr
+  g.Expression
 
 pub type Pat =
-  ast.Pat
+  g.Pattern
+
+pub type Module =
+  g.Module
 
 pub type Type =
   types.Type
@@ -32,18 +24,15 @@ pub type Scheme =
 pub type TEnv =
   env.TEnv
 
-pub type ConvertError =
-  tc_glance.Error
-
 pub fn builtin_env() -> env.TEnv {
   builtins.builtin_env()
 }
 
-pub fn add_stmts(tenv: env.TEnv, stmts: List(ast.Top)) -> env.TEnv {
-  builtins.add_stmts(tenv, stmts)
+pub fn add_module(tenv: env.TEnv, module: g.Module) -> env.TEnv {
+  builtins.add_module(tenv, module)
 }
 
-pub fn infer_expr(tenv: env.TEnv, expr: ast.Expr) -> types.Type {
+pub fn infer_expr(tenv: env.TEnv, expr: g.Expression) -> types.Type {
   state.run_empty(infer.infer_expr(tenv, expr))
 }
 
@@ -53,16 +42,4 @@ pub fn type_to_string(type_: types.Type) -> String {
 
 pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string(scheme_)
-}
-
-pub fn from_glance_expression(
-  expr: g.Expression,
-) -> Result(ast.Expr, tc_glance.Error) {
-  tc_glance.expression(expr)
-}
-
-pub fn from_glance_module(
-  module: g.Module,
-) -> Result(List(ast.Top), tc_glance.Error) {
-  tc_glance.module_to_tops(module)
 }

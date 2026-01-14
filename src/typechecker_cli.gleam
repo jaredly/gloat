@@ -6,7 +6,6 @@ import gleam/list
 import gleam/result
 import gleam/string
 import typechecker
-import typechecker/ast
 import typechecker/env
 
 pub fn main() {
@@ -30,44 +29,49 @@ fn infer_file(path: String) {
 fn infer_source(src: String) {
   case glance.module(src) {
     Error(error) -> io.println_error("Parse error: " <> string.inspect(error))
-    Ok(parsed) ->
-      case typechecker.from_glance_module(parsed) {
-        Error(error) ->
-          io.println_error("Conversion error: " <> string.inspect(error))
-        Ok(tops) -> {
-          let names =
-            list.filter_map(tops, fn(top) {
-              case top {
-                ast.Tdef(name, _, _, _) -> Ok(name)
-                _ -> Error(Nil)
-              }
-            })
-          case names {
-            [] -> io.println("No top-level definitions found.")
-            _ -> {
-              let env_ = typechecker.add_stmts(typechecker.builtin_env(), tops)
-              let inferred =
-                result.all(
-                  list.map(names, fn(name) {
-                    case env.resolve(env_, name) {
-                      Ok(scheme) ->
-                        Ok(#(name, typechecker.scheme_to_string(scheme)))
-                      Error(_) -> Error("Definition not found in env: " <> name)
-                    }
-                  }),
-                )
-              case inferred {
-                Ok(items) ->
-                  list.each(items, fn(item) {
-                    let #(name, scheme) = item
-                    io.println(name <> ": " <> scheme)
-                  })
-                Error(message) -> io.println_error(message)
-              }
-            }
+    Ok(parsed) -> {
+      let glance.Module(_imports, _custom_types, _type_aliases, constants, functions) =
+        parsed
+      let names =
+        list.append(
+          list.map(constants, fn(defn) {
+            let glance.Definition(_attrs, constant) = defn
+            let glance.Constant(_span, name, _publicity, _annotation, _value) =
+              constant
+            name
+          }),
+          list.map(functions, fn(defn) {
+            let glance.Definition(_attrs, function) = defn
+            let glance.Function(_span, name, _publicity, _parameters, _return, _body) =
+              function
+            name
+          }),
+        )
+      case names {
+        [] -> io.println("No top-level definitions found.")
+        _ -> {
+          let env_ = typechecker.add_module(typechecker.builtin_env(), parsed)
+          let inferred =
+            result.all(
+              list.map(names, fn(name) {
+                case env.resolve(env_, name) {
+                  Ok(scheme) ->
+                    Ok(#(name, typechecker.scheme_to_string(scheme)))
+                  Error(_) -> Error("Definition not found in env: " <> name)
+                }
+              }),
+            )
+          case inferred {
+            Ok(items) ->
+              list.each(items, fn(item) {
+                let #(name, scheme) = item
+                io.println(name <> ": " <> scheme)
+              })
+            Error(message) -> io.println_error(message)
           }
         }
       }
+    }
   }
 }
 
