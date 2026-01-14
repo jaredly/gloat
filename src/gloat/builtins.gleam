@@ -31,7 +31,7 @@ pub fn add_def(
     use type_ <- is.bind(infer.infer_expr(bound_env, expr))
     use _ignored_annotation <- is.bind(case annotation {
       option.Some(type_expr) ->
-        case gleam_types.type_(type_expr) {
+        case gleam_types.type_(tenv, type_expr) {
           Ok(annot_type) -> infer.unify(type_, annot_type, loc)
           Error(_) -> is.error("Unsupported annotation", loc)
         }
@@ -113,7 +113,7 @@ pub fn add_defs(
         case annotation {
           option.None -> is.ok(Nil)
           option.Some(type_expr) ->
-            case gleam_types.type_(type_expr) {
+            case gleam_types.type_(tenv, type_expr) {
               Ok(annot_type) -> infer.unify(type_, annot_type, loc)
               Error(_) -> is.error("Unsupported annotation", loc)
             }
@@ -398,7 +398,7 @@ fn add_typealias_def(
   let g.Definition(_attrs, type_alias) = defn
   let g.TypeAlias(span, name, _publicity, parameters, aliased) = type_alias
   let args = list.map(parameters, fn(param) { #(param, span) })
-  case gleam_types.type_(aliased) {
+  case gleam_types.type_(tenv, aliased) {
     Ok(type_) -> Ok(add_typealias(tenv, name, args, type_))
     Error(_) -> Error(type_error.new("Unsupported alias type", span))
   }
@@ -417,7 +417,7 @@ fn add_custom_type_def(
       list.map(variants, fn(variant) {
         let g.Variant(cname, fields, _attributes) = variant
         result.map(
-          result.map_error(gleam_types.variant_fields(fields), fn(_) {
+          result.map_error(gleam_types.variant_fields(tenv, fields), fn(_) {
             type_error.new("Unsupported constructor fields", span)
           }),
           fn(field_types) { #(cname, span, field_types, span) },

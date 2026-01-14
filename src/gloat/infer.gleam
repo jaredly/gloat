@@ -316,7 +316,7 @@ fn infer_expr_inner(
           let g.FnParameter(name, annotation) = param
           case annotation {
             option.Some(type_expr) ->
-              case gleam_types.type_(type_expr) {
+              case gleam_types.type_(tenv, type_expr) {
                 Ok(type_) -> is.ok(#(type_, bound_for_name(name, type_)))
                 Error(_) -> is.error("Unsupported type annotation", span)
               }
@@ -339,7 +339,7 @@ fn infer_expr_inner(
       use body_type <- is.bind(infer_block(bound_env, body, span))
       use _ignored <- is.bind(case return_annotation {
         option.Some(type_expr) ->
-          case gleam_types.type_(type_expr) {
+          case gleam_types.type_(tenv, type_expr) {
             Ok(type_) -> unify(body_type, type_, span)
             Error(gleam_types.Unsupported(name)) ->
               is.error("Unsupported return annotation: " <> name, span)
@@ -487,7 +487,7 @@ fn infer_use_patterns(
       let #(pat_type, scope) = tuple
       use _ignored <- is.bind(case annotation {
         option.Some(type_expr) ->
-          case gleam_types.type_(type_expr) {
+          case gleam_types.type_(tenv, type_expr) {
             Ok(type_) -> unify(type_, pat_type, span)
             Error(_) -> is.error("Unsupported annotation", span)
           }
@@ -513,7 +513,7 @@ fn infer_assignment(
   use value_type <- is.bind(infer_expr(tenv, value))
   use _ignored2 <- is.bind(case annotation {
     option.Some(type_expr) ->
-      case gleam_types.type_(type_expr) {
+      case gleam_types.type_(tenv, type_expr) {
         Ok(type_) -> unify(type_, value_type, span)
         Error(_) -> is.error("Unsupported annotation", span)
       }

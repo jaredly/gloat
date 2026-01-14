@@ -2,47 +2,54 @@ import glance as g
 import gleam/list
 import gleam/option
 import gleam/result
+import gloat/env
 import gloat/types
 
 pub type Error {
   Unsupported(String)
 }
 
-pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
+pub fn type_(
+  _tenv: env.TEnv,
+  type_expr: g.Type,
+) -> Result(types.Type, Error) {
   case type_expr {
-    g.NamedType(span, name, module, parameters) ->
-      case module {
-        option.Some(_) -> Error(Unsupported("qualified type"))
-        option.None -> {
-          let resolved = case name {
-            "BitArray" -> "BitString"
-            _ -> name
-          }
-          result.map(result.all(list.map(parameters, type_)), fn(params) {
-            case params {
-              [] -> types.Tcon(resolved, span)
-              _ -> types.Tapp(types.Tcon(resolved, span), params, span)
-            }
-          })
-        }
+    g.NamedType(span, name, module, parameters) -> {
+      let resolved = case name {
+        "BitArray" -> "BitString"
+        _ -> name
       }
+      let _ignored = module
+      result.map(
+        result.all(list.map(parameters, fn(param) { type_(_tenv, param) })),
+        fn(params) {
+          case params {
+            [] -> types.Tcon(resolved, span)
+            _ -> types.Tapp(types.Tcon(resolved, span), params, span)
+          }
+        },
+      )
+    }
 
     g.VariableType(span, name) -> Ok(types.Tvar(name, span))
 
     g.FunctionType(span, parameters, return_type) ->
       map2(
-        result.all(list.map(parameters, type_)),
-        type_(return_type),
+        result.all(list.map(parameters, fn(param) { type_(_tenv, param) })),
+        type_(_tenv, return_type),
         fn(args, result_type) { types.Tfn(args, result_type, span) },
       )
 
     g.TupleType(span, elements) ->
-      result.map(result.all(list.map(elements, type_)), fn(types_) {
-        case types_ {
-          [_, ..] -> Ok(types.Ttuple(types_, span))
-          _ -> Error(Unsupported("tuple type arity"))
-        }
-      })
+      result.map(
+        result.all(list.map(elements, fn(elem) { type_(_tenv, elem) })),
+        fn(types_) {
+          case types_ {
+            [_, ..] -> Ok(types.Ttuple(types_, span))
+            _ -> Error(Unsupported("tuple type arity"))
+          }
+        },
+      )
       |> result.flatten
 
     g.HoleType(_, _) -> Error(Unsupported("type hole"))
@@ -50,14 +57,17 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
 }
 
 pub fn variant_fields(
+  tenv: env.TEnv,
   fields: List(g.VariantField),
 ) -> Result(List(#(option.Option(String), types.Type)), Error) {
   list.map(fields, fn(field) {
     case field {
       g.LabelledVariantField(type_expr, label) ->
-        result.map(type_(type_expr), fn(type_) { #(option.Some(label), type_) })
+        result.map(type_(tenv, type_expr), fn(type_) {
+          #(option.Some(label), type_)
+        })
       g.UnlabelledVariantField(type_expr) ->
-        result.map(type_(type_expr), fn(type_) { #(option.None, type_) })
+        result.map(type_(tenv, type_expr), fn(type_) { #(option.None, type_) })
     }
   })
   |> result.all
