@@ -58,7 +58,7 @@ pub fn resolve(env: TEnv, name: String) -> Result(scheme.Scheme, Nil) {
             })
           Ok(scheme.Forall(
             set.from_list(free),
-            types.tfns(carg_types, cres, -1),
+            types.tfns(carg_types, cres, types.unknown_span),
           ))
         }
         Error(_) -> Error(Nil)

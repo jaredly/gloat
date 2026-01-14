@@ -16,13 +16,13 @@ import gloat/types
 pub fn add_def(
   tenv: env.TEnv,
   name: String,
-  name_loc: Int,
+  _name_loc: Int,
   expr: g.Expression,
   annotation: option.Option(g.Type),
   loc: Int,
 ) -> env.TEnv {
   state.run_empty({
-    use self <- state.bind(infer.new_type_var(name, name_loc))
+    use self <- state.bind(infer.new_type_var(name, types.unknown_span))
     let bound_env = env.with_type(tenv, name, scheme.Forall(set.new(), self))
     use type_ <- state.bind(infer.infer_expr(bound_env, expr))
     use _ignored_annotation <- state.bind(case annotation {
@@ -68,8 +68,8 @@ pub fn add_defs(
   state.run_empty({
     use vbls <- state.bind(
       state.map_list(defns, fn(args) {
-        let #(name, name_loc, _expr, _annotation, _loc) = args
-        infer.new_type_var(name, name_loc)
+        let #(name, _name_loc, _expr, _annotation, _loc) = args
+        infer.new_type_var(name, types.unknown_span)
       }),
     )
     let bound_env =
@@ -149,7 +149,7 @@ pub fn add_deftype(
   name: String,
   args: List(#(String, Int)),
   constrs: List(#(String, Int, List(#(option.Option(String), types.Type)), Int)),
-  loc: Int,
+  _loc: Int,
 ) -> env.TEnv {
   let free =
     list.map(args, fn(args) {
@@ -159,12 +159,17 @@ pub fn add_deftype(
   let free_set = set.from_list(free)
   let arg_types =
     list.map(args, fn(args) {
-      let #(arg_name, arg_loc) = args
-      types.Tvar(arg_name, arg_loc)
+      let #(arg_name, _arg_loc) = args
+      types.Tvar(arg_name, types.unknown_span)
     })
   let res = case arg_types {
-    [] -> types.Tcon(name, loc)
-    _ -> types.Tapp(types.Tcon(name, loc), arg_types, loc)
+    [] -> types.Tcon(name, types.unknown_span)
+    _ ->
+      types.Tapp(
+        types.Tcon(name, types.unknown_span),
+        arg_types,
+        types.unknown_span,
+      )
   }
 
   let env.TEnv(_values, _tcons, _types, aliases, _modules) = tenv
@@ -195,7 +200,10 @@ pub fn add_deftype(
             t
           })
         let scheme_ =
-          scheme.Forall(set.from_list(free2), types.tfns(carg_types, cres, loc))
+          scheme.Forall(
+            set.from_list(free2),
+            types.tfns(carg_types, cres, types.unknown_span),
+          )
         #(cname, scheme_)
       }),
     )
@@ -828,22 +836,26 @@ fn pat_bound(pat: g.Pattern) -> set.Set(String) {
   }
 }
 
-pub const tbool: types.Type = types.Tcon("Bool", -1)
+pub const tbool: types.Type = types.Tcon("Bool", types.unknown_span)
 
 pub fn tmap(k: types.Type, v: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("Map", -1), [k, v], -1)
+  types.Tapp(types.Tcon("Map", types.unknown_span), [k, v], types.unknown_span)
 }
 
 pub fn toption(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("Option", -1), [arg], -1)
+  types.Tapp(
+    types.Tcon("Option", types.unknown_span),
+    [arg],
+    types.unknown_span,
+  )
 }
 
 pub fn tlist(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("List", -1), [arg], -1)
+  types.Tapp(types.Tcon("List", types.unknown_span), [arg], types.unknown_span)
 }
 
 pub fn tset(arg: types.Type) -> types.Type {
-  types.Tapp(types.Tcon("Set", -1), [arg], -1)
+  types.Tapp(types.Tcon("Set", types.unknown_span), [arg], types.unknown_span)
 }
 
 pub fn concrete(t: types.Type) -> scheme.Scheme {
@@ -855,14 +867,14 @@ pub fn generic(vbls: List(String), t: types.Type) -> scheme.Scheme {
 }
 
 pub fn vbl(k: String) -> types.Type {
-  types.Tvar(k, -1)
+  types.Tvar(k, types.unknown_span)
 }
 
 pub fn t_pair(a: types.Type, b: types.Type) -> types.Type {
-  types.Ttuple([a, b], -1)
+  types.Ttuple([a, b], types.unknown_span)
 }
 
-pub const tstring: types.Type = types.Tcon("String", -1)
+pub const tstring: types.Type = types.Tcon("String", types.unknown_span)
 
 pub fn builtin_env() -> env.TEnv {
   let k = vbl("k")
@@ -875,99 +887,224 @@ pub fn builtin_env() -> env.TEnv {
 
   env.TEnv(
     dict.from_list([
-      #("+", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
-      #("<>", concrete(types.tfns([tstring, tstring], tstring, -1))),
-      #("-", concrete(types.tfns([types.tint, types.tint], types.tint, -1))),
-      #("negate", concrete(types.tfns([types.tint], types.tint, -1))),
-      #(">", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
-      #("<", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
-      #("=", generic(["k"], types.tfns([k, k], tbool, -1))),
-      #("!=", generic(["k"], types.tfns([k, k], tbool, -1))),
-      #(">=", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
-      #("<=", concrete(types.tfns([types.tint, types.tint], tbool, -1))),
-      #("not", concrete(types.tfns([tbool], tbool, -1))),
-      #("()", concrete(types.Tcon("()", -1))),
-      #(",", generic(["a", "b"], types.tfns([a, b], t_pair(a, b), -1))),
+      #(
+        "+",
+        concrete(types.tfns(
+          [types.tint, types.tint],
+          types.tint,
+          types.unknown_span,
+        )),
+      ),
+      #(
+        "<>",
+        concrete(types.tfns([tstring, tstring], tstring, types.unknown_span)),
+      ),
+      #(
+        "-",
+        concrete(types.tfns(
+          [types.tint, types.tint],
+          types.tint,
+          types.unknown_span,
+        )),
+      ),
+      #(
+        "negate",
+        concrete(types.tfns([types.tint], types.tint, types.unknown_span)),
+      ),
+      #(
+        ">",
+        concrete(types.tfns([types.tint, types.tint], tbool, types.unknown_span)),
+      ),
+      #(
+        "<",
+        concrete(types.tfns([types.tint, types.tint], tbool, types.unknown_span)),
+      ),
+      #("=", generic(["k"], types.tfns([k, k], tbool, types.unknown_span))),
+      #("!=", generic(["k"], types.tfns([k, k], tbool, types.unknown_span))),
+      #(
+        ">=",
+        concrete(types.tfns([types.tint, types.tint], tbool, types.unknown_span)),
+      ),
+      #(
+        "<=",
+        concrete(types.tfns([types.tint, types.tint], tbool, types.unknown_span)),
+      ),
+      #("not", concrete(types.tfns([tbool], tbool, types.unknown_span))),
+      #("()", concrete(types.Tcon("()", types.unknown_span))),
+      #(
+        ",",
+        generic(
+          ["a", "b"],
+          types.tfns([a, b], t_pair(a, b), types.unknown_span),
+        ),
+      ),
       #(
         "trace",
         kk(types.tfns(
           [
             types.Tapp(
-              types.Tcon("List", -1),
-              [types.Tapp(types.Tcon("trace-fmt", -1), [k], -1)],
-              -1,
+              types.Tcon("List", types.unknown_span),
+              [
+                types.Tapp(
+                  types.Tcon("trace-fmt", types.unknown_span),
+                  [k],
+                  types.unknown_span,
+                ),
+              ],
+              types.unknown_span,
             ),
           ],
-          types.Tcon("()", -1),
-          -1,
+          types.Tcon("()", types.unknown_span),
+          types.unknown_span,
         )),
       ),
-      #("unescapeString", concrete(types.tfns([tstring], tstring, -1))),
-      #("int-to-string", concrete(types.tfns([types.tint], tstring, -1))),
-      #("int/to_string", concrete(types.tfns([types.tint], tstring, -1))),
+      #(
+        "unescapeString",
+        concrete(types.tfns([tstring], tstring, types.unknown_span)),
+      ),
+      #(
+        "int-to-string",
+        concrete(types.tfns([types.tint], tstring, types.unknown_span)),
+      ),
+      #(
+        "int/to_string",
+        concrete(types.tfns([types.tint], tstring, types.unknown_span)),
+      ),
       #(
         "float/to_string",
-        concrete(types.tfns([types.Tcon("Float", -1)], tstring, -1)),
+        concrete(types.tfns(
+          [types.Tcon("Float", types.unknown_span)],
+          tstring,
+          types.unknown_span,
+        )),
       ),
-      #("string/append", concrete(types.tfns([tstring, tstring], tstring, -1))),
+      #(
+        "string/append",
+        concrete(types.tfns([tstring, tstring], tstring, types.unknown_span)),
+      ),
       #(
         "string/repeat",
-        concrete(types.tfns([tstring, types.tint], tstring, -1)),
+        concrete(types.tfns([tstring, types.tint], tstring, types.unknown_span)),
       ),
       #(
         "string/replace",
-        concrete(types.tfns([tstring, tstring, tstring], tstring, -1)),
+        concrete(types.tfns(
+          [tstring, tstring, tstring],
+          tstring,
+          types.unknown_span,
+        )),
       ),
       #(
         "string-to-int",
-        concrete(types.tfns([tstring], toption(types.tint), -1)),
+        concrete(types.tfns([tstring], toption(types.tint), types.unknown_span)),
       ),
       #(
         "string-to-float",
-        concrete(types.tfns([tstring], toption(types.Tcon("Float", -1)), -1)),
+        concrete(types.tfns(
+          [tstring],
+          toption(types.Tcon("Float", types.unknown_span)),
+          types.unknown_span,
+        )),
       ),
       #("map/nil", kv(tmap(k, v))),
-      #("map/set", kv(types.tfns([tmap(k, v), k, v], tmap(k, v), -1))),
-      #("map/rm", kv(types.tfns([tmap(k, v), k], tmap(k, v), -1))),
-      #("map/get", kv(types.tfns([tmap(k, v), k], toption(v), -1))),
+      #(
+        "map/set",
+        kv(types.tfns([tmap(k, v), k, v], tmap(k, v), types.unknown_span)),
+      ),
+      #(
+        "map/rm",
+        kv(types.tfns([tmap(k, v), k], tmap(k, v), types.unknown_span)),
+      ),
+      #(
+        "map/get",
+        kv(types.tfns([tmap(k, v), k], toption(v), types.unknown_span)),
+      ),
       #(
         "map/map",
         generic(
           ["k", "v", "v2"],
-          types.tfns([types.tfns([v], v2, -1), tmap(k, v)], tmap(k, v2), -1),
+          types.tfns(
+            [types.tfns([v], v2, types.unknown_span), tmap(k, v)],
+            tmap(k, v2),
+            types.unknown_span,
+          ),
         ),
       ),
-      #("map/merge", kv(types.tfns([tmap(k, v), tmap(k, v)], tmap(k, v), -1))),
-      #("map/values", kv(types.tfns([tmap(k, v)], tlist(v), -1))),
-      #("map/keys", kv(types.tfns([tmap(k, v)], tlist(k), -1))),
+      #(
+        "map/merge",
+        kv(types.tfns([tmap(k, v), tmap(k, v)], tmap(k, v), types.unknown_span)),
+      ),
+      #(
+        "map/values",
+        kv(types.tfns([tmap(k, v)], tlist(v), types.unknown_span)),
+      ),
+      #("map/keys", kv(types.tfns([tmap(k, v)], tlist(k), types.unknown_span))),
       #("set/nil", kk(tset(k))),
-      #("set/add", kk(types.tfns([tset(k), k], tset(k), -1))),
-      #("set/has", kk(types.tfns([tset(k), k], tbool, -1))),
-      #("set/rm", kk(types.tfns([tset(k), k], tset(k), -1))),
-      #("set/diff", kk(types.tfns([tset(k), tset(k)], tset(k), -1))),
-      #("set/merge", kk(types.tfns([tset(k), tset(k)], tset(k), -1))),
-      #("set/overlap", kk(types.tfns([tset(k), tset(k)], tset(k), -1))),
-      #("set/to-list", kk(types.tfns([tset(k)], tlist(k), -1))),
-      #("set/from-list", kk(types.tfns([tlist(k)], tset(k), -1))),
-      #("map/from-list", kv(types.tfns([tlist(t_pair(k, v))], tmap(k, v), -1))),
-      #("map/to-list", kv(types.tfns([tmap(k, v)], tlist(t_pair(k, v)), -1))),
+      #("set/add", kk(types.tfns([tset(k), k], tset(k), types.unknown_span))),
+      #("set/has", kk(types.tfns([tset(k), k], tbool, types.unknown_span))),
+      #("set/rm", kk(types.tfns([tset(k), k], tset(k), types.unknown_span))),
+      #(
+        "set/diff",
+        kk(types.tfns([tset(k), tset(k)], tset(k), types.unknown_span)),
+      ),
+      #(
+        "set/merge",
+        kk(types.tfns([tset(k), tset(k)], tset(k), types.unknown_span)),
+      ),
+      #(
+        "set/overlap",
+        kk(types.tfns([tset(k), tset(k)], tset(k), types.unknown_span)),
+      ),
+      #("set/to-list", kk(types.tfns([tset(k)], tlist(k), types.unknown_span))),
+      #(
+        "set/from-list",
+        kk(types.tfns([tlist(k)], tset(k), types.unknown_span)),
+      ),
+      #(
+        "map/from-list",
+        kv(types.tfns([tlist(t_pair(k, v))], tmap(k, v), types.unknown_span)),
+      ),
+      #(
+        "map/to-list",
+        kv(types.tfns([tmap(k, v)], tlist(t_pair(k, v)), types.unknown_span)),
+      ),
       #(
         "jsonify",
-        generic(["v"], types.tfns([types.Tvar("v", -1)], tstring, -1)),
+        generic(
+          ["v"],
+          types.tfns(
+            [types.Tvar("v", types.unknown_span)],
+            tstring,
+            types.unknown_span,
+          ),
+        ),
       ),
-      #("valueToString", generic(["v"], types.tfns([vbl("v")], tstring, -1))),
+      #(
+        "valueToString",
+        generic(["v"], types.tfns([vbl("v")], tstring, types.unknown_span)),
+      ),
       #(
         "eval",
-        generic(["v"], types.tfns([types.Tcon("String", -1)], vbl("v"), -1)),
+        generic(
+          ["v"],
+          types.tfns(
+            [types.Tcon("String", types.unknown_span)],
+            vbl("v"),
+            types.unknown_span,
+          ),
+        ),
       ),
       #(
         "eval-with",
         generic(
           ["ctx", "v"],
           types.tfns(
-            [types.Tcon("ctx", -1), types.Tcon("String", -1)],
+            [
+              types.Tcon("ctx", types.unknown_span),
+              types.Tcon("String", types.unknown_span),
+            ],
             vbl("v"),
-            -1,
+            types.unknown_span,
           ),
         ),
       ),
@@ -976,41 +1113,71 @@ pub fn builtin_env() -> env.TEnv {
         generic(
           ["v"],
           types.tfns(
-            [types.tfns([vbl("v")], tstring, -1), vbl("v")],
+            [types.tfns([vbl("v")], tstring, types.unknown_span), vbl("v")],
             tstring,
-            -1,
+            types.unknown_span,
           ),
         ),
       ),
-      #("sanitize", concrete(types.tfns([tstring], tstring, -1))),
+      #(
+        "sanitize",
+        concrete(types.tfns([tstring], tstring, types.unknown_span)),
+      ),
       #(
         "replace-all",
-        concrete(types.tfns([tstring, tstring, tstring], tstring, -1)),
+        concrete(types.tfns(
+          [tstring, tstring, tstring],
+          tstring,
+          types.unknown_span,
+        )),
       ),
-      #("fatal", generic(["v"], types.tfns([tstring], vbl("v"), -1))),
+      #(
+        "fatal",
+        generic(["v"], types.tfns([tstring], vbl("v"), types.unknown_span)),
+      ),
     ]),
     dict.from_list([
-      #("()", #([], [], types.Tcon("()", -1))),
+      #("()", #([], [], types.Tcon("()", types.unknown_span))),
       #(",", #(["a", "b"], [#(option.None, a), #(option.None, b)], t_pair(a, b))),
       #("True", #([], [], tbool)),
       #("False", #([], [], tbool)),
-      #("Nil", #([], [], types.Tcon("Nil", -1))),
+      #("Nil", #([], [], types.Tcon("Nil", types.unknown_span))),
       #("Error", #(
         ["a", "b"],
         [#(option.None, a)],
-        types.Tapp(types.Tcon("Result", -1), [a, b], -1),
+        types.Tapp(
+          types.Tcon("Result", types.unknown_span),
+          [a, b],
+          types.unknown_span,
+        ),
       )),
       #("Ok", #(
         ["a", "b"],
         [#(option.None, b)],
-        types.Tapp(types.Tcon("Result", -1), [a, b], -1),
+        types.Tapp(
+          types.Tcon("Result", types.unknown_span),
+          [a, b],
+          types.unknown_span,
+        ),
       )),
       #("Some", #(
         ["a"],
         [#(option.None, a)],
-        types.Tapp(types.Tcon("Option", -1), [a], -1),
+        types.Tapp(
+          types.Tcon("Option", types.unknown_span),
+          [a],
+          types.unknown_span,
+        ),
       )),
-      #("None", #(["a"], [], types.Tapp(types.Tcon("Option", -1), [a], -1))),
+      #("None", #(
+        ["a"],
+        [],
+        types.Tapp(
+          types.Tcon("Option", types.unknown_span),
+          [a],
+          types.unknown_span,
+        ),
+      )),
     ]),
     dict.from_list([
       #("Nil", #(0, set.new())),

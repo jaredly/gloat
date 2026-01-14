@@ -1,15 +1,19 @@
+import glance as g
 import gleam/dict
 import gleam/list
 import gleam/set
 import gleam/string
 import gloat/runtime
 
+pub type Span =
+  g.Span
+
 pub type Type {
-  Tvar(String, Int)
-  Tapp(Type, List(Type), Int)
-  Tcon(String, Int)
-  Ttuple(List(Type), Int)
-  Tfn(List(Type), Type, Int)
+  Tvar(String, Span)
+  Tapp(Type, List(Type), Span)
+  Tcon(String, Span)
+  Ttuple(List(Type), Span)
+  Tfn(List(Type), Type, Span)
 }
 
 pub type Subst =
@@ -43,18 +47,20 @@ pub fn type_eq(one: Type, two: Type) -> Bool {
   }
 }
 
-pub fn tfn(arg: Type, body: Type, loc: Int) -> Type {
-  Tfn([arg], body, loc)
+pub fn tfn(arg: Type, body: Type, span: Span) -> Type {
+  Tfn([arg], body, span)
 }
 
-pub fn tfns(args: List(Type), body: Type, loc: Int) -> Type {
+pub fn tfns(args: List(Type), body: Type, span: Span) -> Type {
   case args {
     [] -> body
-    _ -> Tfn(args, body, loc)
+    _ -> Tfn(args, body, span)
   }
 }
 
-pub const tint: Type = Tcon("Int", -1)
+pub const unknown_span: Span = g.Span(-1, -1)
+
+pub const tint: Type = Tcon("Int", unknown_span)
 
 pub fn type_to_string_simple(type_: Type) -> String {
   case type_ {
@@ -190,7 +196,7 @@ pub fn type_con_to_var(vars: set.Set(String), type_: Type) -> Type {
   }
 }
 
-pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Int))) {
+pub fn type_unroll_app(type_: Type) -> #(Type, List(#(Type, Span))) {
   case type_ {
     Tapp(target, args, loc) -> #(
       target,

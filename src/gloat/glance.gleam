@@ -795,33 +795,26 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
           }
           result.map(result.all(list.map(parameters, type_)), fn(params) {
             case params {
-              [] -> types.Tcon(resolved, loc_from_span(span))
-              _ ->
-                types.Tapp(
-                  types.Tcon(resolved, loc_from_span(span)),
-                  params,
-                  loc_from_span(span),
-                )
+              [] -> types.Tcon(resolved, span)
+              _ -> types.Tapp(types.Tcon(resolved, span), params, span)
             }
           })
         }
       }
 
-    g.VariableType(span, name) -> Ok(types.Tvar(name, loc_from_span(span)))
+    g.VariableType(span, name) -> Ok(types.Tvar(name, span))
 
     g.FunctionType(span, parameters, return_type) ->
       map2(
         result.all(list.map(parameters, type_)),
         type_(return_type),
-        fn(args, result_type) {
-          types.Tfn(args, result_type, loc_from_span(span))
-        },
+        fn(args, result_type) { types.Tfn(args, result_type, span) },
       )
 
     g.TupleType(span, elements) ->
       result.map(result.all(list.map(elements, type_)), fn(types_) {
         case types_ {
-          [_, ..] -> Ok(types.Ttuple(types_, loc_from_span(span)))
+          [_, ..] -> Ok(types.Ttuple(types_, span))
           _ -> Error(Unsupported("tuple type arity"))
         }
       })
