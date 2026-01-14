@@ -2,11 +2,13 @@ import glance
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic
+import gleam/int
 import gleam/io
 import gleam/list
 import gleam/result
 import gleam/set
 import gleam/string
+import glexer.{Position}
 import gloat
 import gloat/env
 
@@ -33,7 +35,7 @@ fn infer_file(path: String, lib_dirs: List(String)) {
 
 fn infer_source(src: String, path: String, lib_dirs: List(String)) {
   case glance.module(src) {
-    Error(error) -> io.println_error("Parse error: " <> string.inspect(error))
+    Error(error) -> io.println_error(format_parse_error(path, src, error))
     Ok(parsed) -> {
       let search_dirs = [dir_of_path(path), ..lib_dirs]
       let glance.Module(
@@ -152,10 +154,10 @@ fn load_module(
     False -> {
       let visited = set.insert(visited, module_name)
       result.try(read_module_source(module_name, search_dirs), fn(args) {
-        let #(_path, src) = args
+        let #(path, src) = args
         result.try(
           result.map_error(glance.module(src), fn(error) {
-            "Parse error in " <> module_name <> ": " <> string.inspect(error)
+            format_parse_error(path, src, error)
           }),
           fn(parsed) {
             let glance.Module(imports, _custom_types, _type_aliases, _, _) =
@@ -367,6 +369,94 @@ fn module_key(module_name: String) -> String {
   case list.reverse(parts) {
     [last, ..] -> last
     [] -> module_name
+  }
+}
+
+fn format_parse_error(
+  path: String,
+  source: String,
+  error: glance.Error,
+) -> String {
+  case error {
+    glance.UnexpectedEndOfInput -> {
+      let offset = string.byte_size(source)
+      format_span_message(
+        "Parse error: unexpected end of input",
+        path,
+        source,
+        glance.Span(offset, offset),
+      )
+    }
+    glance.UnexpectedToken(token, position) -> {
+      let Position(offset) = position
+      format_span_message(
+        "Parse error: unexpected token " <> string.inspect(token),
+        path,
+        source,
+        glance.Span(offset, offset + 1),
+      )
+    }
+  }
+}
+
+fn format_span_message(
+  message: String,
+  path: String,
+  source: String,
+  span: glance.Span,
+) -> String {
+  let glance.Span(start, end) = span
+  let #(line, col, line_text) = line_info(source, start)
+  let caret_len = int.max(1, end - start)
+  let padding = string.repeat(" ", col - 1)
+  let caret = string.repeat("^", caret_len)
+  message
+  <> "\n --> "
+  <> path
+  <> ":"
+  <> int.to_string(line)
+  <> ":"
+  <> int.to_string(col)
+  <> "\n  |\n"
+  <> int.to_string(line)
+  <> " | "
+  <> line_text
+  <> "\n  | "
+  <> padding
+  <> caret
+}
+
+fn line_info(source: String, offset: Int) -> #(Int, Int, String) {
+  let max_offset = string.byte_size(source)
+  let capped = int.min(int.max(offset, 0), max_offset)
+  let prefix = byte_slice(source, 0, capped)
+  let prefix_lines = string.split(prefix, "\n")
+  let line_no = list.length(prefix_lines)
+  let col = case list.reverse(prefix_lines) {
+    [last, ..] -> string.length(last) + 1
+    [] -> 1
+  }
+  let line_text = list_nth(string.split(source, "\n"), line_no - 1, "")
+  #(line_no, col, line_text)
+}
+
+fn byte_slice(source: String, start: Int, length: Int) -> String {
+  let bits = bit_array.from_string(source)
+  case bit_array.slice(bits, start, length) {
+    Ok(slice) ->
+      case bit_array.to_string(slice) {
+        Ok(text) -> text
+        Error(_) -> ""
+      }
+    Error(_) -> ""
+  }
+}
+
+fn list_nth(list: List(a), index: Int, default: a) -> a {
+  case list, index {
+    [], _ -> default
+    [head, ..], 0 -> head
+    [_head, ..tail], _ -> list_nth(tail, index - 1, default)
   }
 }
 
