@@ -5,6 +5,7 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/set
+import gleam/string
 import gloat/env
 import gloat/exhaustive
 import gloat/gleam_types
@@ -29,17 +30,21 @@ fn infer_expr_inner(
   expr: g.Expression,
 ) -> is.InferState(types.Type) {
   case expr {
-    g.Int(span, value) ->
-      case int.parse(value) {
+    g.Int(span, value) -> {
+      let normalized = string.replace(value, "_", "")
+      case int.parse(normalized) {
         Ok(_) -> is.ok(types.Tcon("Int", span))
         Error(_) -> is.error("Invalid int literal", span)
       }
+    }
 
-    g.Float(span, value) ->
-      case float.parse(value) {
+    g.Float(span, value) -> {
+      let normalized = string.replace(value, "_", "")
+      case float.parse(normalized) {
         Ok(_) -> is.ok(types.Tcon("Float", span))
         Error(_) -> is.error("Invalid float literal", span)
       }
+    }
 
     g.String(span, _value) -> is.ok(types.Tcon("String", span))
 

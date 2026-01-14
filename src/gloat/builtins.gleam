@@ -637,16 +637,19 @@ fn def_info_groups(defs: List(DefInfo)) -> List(List(DefInfo)) {
       let names = list.map(defs, def_name)
       let names_set = set.from_list(names)
       let deps =
-        dict.from_list(
-          list.map(defs, fn(def) {
-            let free = expr_free(def_expr(def), set.new())
-            let dep_names =
-              list.filter(set.to_list(free), fn(name) {
-                set.contains(names_set, name)
-              })
-            #(def_name(def), set.from_list(dep_names))
-          }),
-        )
+        list.fold(defs, dict.new(), fn(acc, def) {
+          let free = expr_free(def_expr(def), set.new())
+          let dep_names =
+            list.filter(set.to_list(free), fn(name) {
+              set.contains(names_set, name)
+            })
+          let dep_set = set.from_list(dep_names)
+          case dict.get(acc, def_name(def)) {
+            Ok(existing) ->
+              dict.insert(acc, def_name(def), set.union(existing, dep_set))
+            Error(_) -> dict.insert(acc, def_name(def), dep_set)
+          }
+        })
       let order = dfs_finish_order(names, deps, names)
       let reverse_deps = reverse_graph(names, deps)
       let sccs = dfs_sccs(order, reverse_deps, names)
