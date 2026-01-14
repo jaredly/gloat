@@ -12,7 +12,9 @@ import gleam/string
 import glexer.{Position}
 import gloat
 import gloat/env
+import gloat/scheme
 import gloat/type_error
+import gloat/types
 
 pub fn main() {
   case parse_args(start_arguments()) {
@@ -207,35 +209,51 @@ fn module_exports_env(
   let value_names = module_value_names(parsed)
   let constructor_names = module_constructor_names(parsed)
   let exported = list.append(value_names, constructor_names)
-  result.try(qualified_values(module_env, module_key, exported), fn(values) {
-    let type_names = module_type_names(parsed)
-    let alias_names = module_alias_names(parsed)
-    let env.TEnv(_values, tcons, types, aliases, _modules, _params) = module_env
-    let tcons_filtered = filter_dict(tcons, constructor_names)
-    let types_filtered = filter_dict(types, type_names)
-    let aliases_filtered = filter_dict(aliases, alias_names)
-    let params = qualified_params(module_env, module_key, exported)
-    Ok(env.TEnv(
-      values,
-      tcons_filtered,
-      types_filtered,
-      aliases_filtered,
-      dict.new(),
-      params,
-    ))
-  })
+  let type_names = module_type_names(parsed)
+  let alias_names = module_alias_names(parsed)
+  let type_name_map = type_name_map(module_key, type_names, alias_names)
+  result.try(
+    qualified_values(module_env, module_key, exported, type_name_map),
+    fn(values) {
+      let env.TEnv(_values, tcons, types, aliases, _modules, _params) =
+        module_env
+      let tcons_filtered =
+        filter_dict(tcons, constructor_names)
+        |> qualify_tcons(module_key, type_name_map)
+      let types_filtered =
+        filter_dict(types, type_names)
+        |> qualify_types_map(module_key)
+      let aliases_filtered =
+        filter_dict(aliases, alias_names)
+        |> qualify_aliases(module_key, type_name_map)
+      let params = qualified_params(module_env, module_key, exported)
+      Ok(env.TEnv(
+        values,
+        tcons_filtered,
+        types_filtered,
+        aliases_filtered,
+        dict.new(),
+        params,
+      ))
+    },
+  )
 }
 
 fn qualified_values(
   module_env: env.TEnv,
   module_key: String,
   names: List(String),
+  type_name_map: dict.Dict(String, String),
 ) -> Result(dict.Dict(String, gloat.Scheme), String) {
   result.map(
     result.all(
       list.map(names, fn(name) {
         case env.resolve(module_env, name) {
-          Ok(scheme) -> Ok(#(module_key <> "/" <> name, scheme))
+          Ok(scheme) ->
+            Ok(#(
+              module_key <> "/" <> name,
+              qualify_scheme(scheme, type_name_map),
+            ))
           Error(_) ->
             Error(
               "Definition not found in module: " <> module_key <> "/" <> name,
@@ -258,6 +276,114 @@ fn qualified_params(
       Error(_) -> acc
     }
   })
+}
+
+fn qualify_tcons(
+  tcons: dict.Dict(
+    String,
+    #(List(String), List(#(option.Option(String), types.Type)), types.Type),
+  ),
+  module_key: String,
+  type_name_map: dict.Dict(String, String),
+) -> dict.Dict(
+  String,
+  #(List(String), List(#(option.Option(String), types.Type)), types.Type),
+) {
+  dict.to_list(tcons)
+  |> list.map(fn(entry) {
+    let #(name, #(free, fields, res)) = entry
+    let qualified_fields =
+      list.map(fields, fn(field) {
+        let #(label, type_) = field
+        #(label, qualify_type(type_, type_name_map))
+      })
+    let qualified_res = qualify_type(res, type_name_map)
+    #(module_key <> "/" <> name, #(free, qualified_fields, qualified_res))
+  })
+  |> dict.from_list
+}
+
+fn qualify_aliases(
+  aliases: dict.Dict(String, #(List(String), types.Type)),
+  module_key: String,
+  type_name_map: dict.Dict(String, String),
+) -> dict.Dict(String, #(List(String), types.Type)) {
+  dict.to_list(aliases)
+  |> list.map(fn(entry) {
+    let #(name, #(free, alias_type)) = entry
+    #(module_key <> "/" <> name, #(
+      free,
+      qualify_type(alias_type, type_name_map),
+    ))
+  })
+  |> dict.from_list
+}
+
+fn qualify_types_map(
+  types_map: dict.Dict(String, #(Int, set.Set(String))),
+  module_key: String,
+) -> dict.Dict(String, #(Int, set.Set(String))) {
+  dict.to_list(types_map)
+  |> list.map(fn(entry) {
+    let #(name, #(arity, constructors)) = entry
+    let qualified =
+      list.map(set.to_list(constructors), fn(constructor) {
+        module_key <> "/" <> constructor
+      })
+      |> set.from_list
+    #(module_key <> "/" <> name, #(arity, qualified))
+  })
+  |> dict.from_list
+}
+
+fn type_name_map(
+  module_key: String,
+  type_names: List(String),
+  alias_names: List(String),
+) -> dict.Dict(String, String) {
+  let names = list.append(type_names, alias_names)
+  dict.from_list(
+    list.map(names, fn(name) { #(name, module_key <> "/" <> name) }),
+  )
+}
+
+fn qualify_scheme(
+  scheme_: scheme.Scheme,
+  type_name_map: dict.Dict(String, String),
+) -> scheme.Scheme {
+  let scheme.Forall(vbls, type_) = scheme_
+  scheme.Forall(vbls, qualify_type(type_, type_name_map))
+}
+
+fn qualify_type(
+  type_: types.Type,
+  type_name_map: dict.Dict(String, String),
+) -> types.Type {
+  case type_ {
+    types.Tvar(_, _) -> type_
+    types.Tcon(name, span) ->
+      case dict.get(type_name_map, name) {
+        Ok(qualified) -> types.Tcon(qualified, span)
+        Error(_) -> type_
+      }
+    types.Tapp(target, args, span) ->
+      types.Tapp(
+        qualify_type(target, type_name_map),
+        list.map(args, fn(arg) { qualify_type(arg, type_name_map) }),
+        span,
+      )
+    types.Ttuple(args, span) ->
+      types.Ttuple(
+        list.map(args, fn(arg) { qualify_type(arg, type_name_map) }),
+        span,
+      )
+    types.Tfn(args, res, span) ->
+      types.Tfn(
+        list.map(args, fn(arg) { qualify_type(arg, type_name_map) }),
+        qualify_type(res, type_name_map),
+        span,
+      )
+  }
 }
 
 fn module_value_names(parsed: glance.Module) -> List(String) {

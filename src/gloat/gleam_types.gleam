@@ -9,23 +9,27 @@ pub type Error {
   Unsupported(String)
 }
 
-pub fn type_(
-  _tenv: env.TEnv,
-  type_expr: g.Type,
-) -> Result(types.Type, Error) {
+pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
   case type_expr {
     g.NamedType(span, name, module, parameters) -> {
       let resolved = case name {
         "BitArray" -> "BitString"
         _ -> name
       }
-      let _ignored = module
+      let qualified = case module {
+        option.None -> resolved
+        option.Some(module_name) ->
+          case env.resolve_module(tenv, module_name) {
+            Ok(module_key) -> module_key <> "/" <> resolved
+            Error(_) -> module_name <> "/" <> resolved
+          }
+      }
       result.map(
-        result.all(list.map(parameters, fn(param) { type_(_tenv, param) })),
+        result.all(list.map(parameters, fn(param) { type_(tenv, param) })),
         fn(params) {
           case params {
-            [] -> types.Tcon(resolved, span)
-            _ -> types.Tapp(types.Tcon(resolved, span), params, span)
+            [] -> types.Tcon(qualified, span)
+            _ -> types.Tapp(types.Tcon(qualified, span), params, span)
           }
         },
       )
@@ -35,14 +39,14 @@ pub fn type_(
 
     g.FunctionType(span, parameters, return_type) ->
       map2(
-        result.all(list.map(parameters, fn(param) { type_(_tenv, param) })),
-        type_(_tenv, return_type),
+        result.all(list.map(parameters, fn(param) { type_(tenv, param) })),
+        type_(tenv, return_type),
         fn(args, result_type) { types.Tfn(args, result_type, span) },
       )
 
     g.TupleType(span, elements) ->
       result.map(
-        result.all(list.map(elements, fn(elem) { type_(_tenv, elem) })),
+        result.all(list.map(elements, fn(elem) { type_(tenv, elem) })),
         fn(types_) {
           case types_ {
             [_, ..] -> Ok(types.Ttuple(types_, span))
