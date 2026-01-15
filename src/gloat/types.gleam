@@ -111,6 +111,159 @@ pub fn type_to_string(type_: Type) -> String {
   }
 }
 
+pub fn type_to_string_gleam(type_: Type) -> String {
+  type_to_string_gleam_inner(substitute_tvar_names(type_))
+}
+
+pub fn substitute_tvar_names(type_: Type) -> Type {
+  let #(updated, _, _) = substitute_tvar_names_with_state(type_, dict.new(), 0)
+  updated
+}
+
+fn substitute_tvar_names_with_state(
+  type_: Type,
+  names: dict.Dict(String, String),
+  next_idx: Int,
+) -> #(Type, dict.Dict(String, String), Int) {
+  case type_ {
+    Tvar(name, span) -> {
+      case dict.get(names, name) {
+        Ok(substituted) -> #(Tvar(substituted, span), names, next_idx)
+        Error(_) -> {
+          let substituted = tvar_name_from_index(next_idx)
+          let names = dict.insert(names, name, substituted)
+          #(Tvar(substituted, span), names, next_idx + 1)
+        }
+      }
+    }
+    Tcon(_, _) -> #(type_, names, next_idx)
+    Ttuple(args, span) -> {
+      let #(updated_args, names, next_idx) =
+        substitute_tvar_names_list(args, names, next_idx)
+      #(Ttuple(updated_args, span), names, next_idx)
+    }
+    Tfn(args, result, span) -> {
+      let #(updated_args, names, next_idx) =
+        substitute_tvar_names_list(args, names, next_idx)
+      let #(updated_result, names, next_idx) =
+        substitute_tvar_names_with_state(result, names, next_idx)
+      #(Tfn(updated_args, updated_result, span), names, next_idx)
+    }
+    Tapp(target, args, span) -> {
+      let #(updated_target, names, next_idx) =
+        substitute_tvar_names_with_state(target, names, next_idx)
+      let #(updated_args, names, next_idx) =
+        substitute_tvar_names_list(args, names, next_idx)
+      #(Tapp(updated_target, updated_args, span), names, next_idx)
+    }
+  }
+}
+
+fn substitute_tvar_names_list(
+  args: List(Type),
+  names: dict.Dict(String, String),
+  next_idx: Int,
+) -> #(List(Type), dict.Dict(String, String), Int) {
+  list.fold(args, #([], names, next_idx), fn(acc, arg) {
+    let #(rev_args, names, next_idx) = acc
+    let #(updated_arg, names, next_idx) =
+      substitute_tvar_names_with_state(arg, names, next_idx)
+    #([updated_arg, ..rev_args], names, next_idx)
+  })
+  |> fn(result) {
+    let #(rev_args, names, next_idx) = result
+    #(list.reverse(rev_args), names, next_idx)
+  }
+}
+
+fn tvar_name_from_index(idx: Int) -> String {
+  let alphabet_length = 26
+  let chars = tvar_name_loop(idx, alphabet_length, [])
+  string.concat(chars)
+}
+
+fn tvar_name_loop(
+  rest: Int,
+  alphabet_length: Int,
+  chars: List(String),
+) -> List(String) {
+  let n = rest % alphabet_length
+  let rest = rest / alphabet_length
+  let chars = [alphabet_letter(n), ..chars]
+  case rest == 0 {
+    True -> chars
+    False -> tvar_name_loop(rest - 1, alphabet_length, chars)
+  }
+}
+
+fn alphabet_letter(idx: Int) -> String {
+  case idx {
+    0 -> "a"
+    1 -> "b"
+    2 -> "c"
+    3 -> "d"
+    4 -> "e"
+    5 -> "f"
+    6 -> "g"
+    7 -> "h"
+    8 -> "i"
+    9 -> "j"
+    10 -> "k"
+    11 -> "l"
+    12 -> "m"
+    13 -> "n"
+    14 -> "o"
+    15 -> "p"
+    16 -> "q"
+    17 -> "r"
+    18 -> "s"
+    19 -> "t"
+    20 -> "u"
+    21 -> "v"
+    22 -> "w"
+    23 -> "x"
+    24 -> "y"
+    25 -> "z"
+    _ -> "a"
+  }
+}
+
+fn type_to_string_gleam_inner(type_: Type) -> String {
+  case type_ {
+    Tvar(name, _) -> name
+    Tcon(name, _) -> name
+    Ttuple(args, _) ->
+      "#("
+      <> string.join(list.map(args, type_to_string_gleam_inner), with: ", ")
+      <> ")"
+    Tfn(args, result, _) ->
+      "fn("
+      <> string.join(list.map(args, type_to_string_gleam_inner), with: ", ")
+      <> ") -> "
+      <> type_to_string_gleam_inner(result)
+    Tapp(_, _, _) -> {
+      let #(target, args) = unwrap_app(type_, [])
+      let target_s = type_to_string_gleam_target(target)
+      case args {
+        [] -> target_s
+        _ ->
+          target_s
+          <> "("
+          <> string.join(list.map(args, type_to_string_gleam_inner), with: ", ")
+          <> ")"
+      }
+    }
+  }
+}
+
+fn type_to_string_gleam_target(type_: Type) -> String {
+  case type_ {
+    Tcon(name, _) -> name
+    Tvar(name, _) -> name
+    _ -> "(" <> type_to_string_gleam_inner(type_) <> ")"
+  }
+}
+
 pub fn unwrap_fn(type_: Type) -> #(List(Type), Type) {
   case type_ {
     Tfn(args, res, _) -> #(args, res)

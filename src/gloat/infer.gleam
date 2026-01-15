@@ -39,7 +39,12 @@ fn infer_expr_inner(
     }
 
     g.Float(span, value) -> {
-      let normalized = string.replace(value, "_", "")
+      let normalized =
+        string.replace(value, "_", "")
+        <> case string.ends_with(value, ".") {
+          True -> "0"
+          False -> ""
+        }
       case float.parse(normalized) {
         Ok(_) -> is.ok(types.Tcon("Float", span))
         Error(_) -> is.error("Invalid float literal", span)

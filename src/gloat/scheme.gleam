@@ -31,6 +31,11 @@ pub fn scheme_to_string(scheme: Scheme) -> String {
   }
 }
 
+pub fn scheme_to_string_gleam(scheme: Scheme) -> String {
+  let Forall(_, type_) = scheme
+  types.type_to_string_gleam(type_)
+}
+
 pub fn map_without(subst: types.Subst, keys: set.Set(String)) -> types.Subst {
   set.fold(keys, subst, fn(acc, key) { dict.delete(acc, key) })
 }
