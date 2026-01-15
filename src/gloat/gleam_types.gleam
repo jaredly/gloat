@@ -10,6 +10,8 @@ pub type Error {
 }
 
 pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
+  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params, _type_names) =
+    tenv
   case type_expr {
     g.NamedType(span, name, module, parameters) -> {
       let resolved = case name {
@@ -41,6 +43,7 @@ pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
           }
         },
       )
+      |> result.map(fn(t) { types.type_resolve_aliases(aliases, t) })
     }
 
     g.VariableType(span, name) -> Ok(types.Tvar(name, span))

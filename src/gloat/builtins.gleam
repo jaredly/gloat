@@ -359,11 +359,43 @@ fn add_imports(
           case env.resolve(tenv, qualified) {
             Ok(scheme_) -> {
               let acc4 = env.with_type(acc3, target, scheme_)
-              let acc5 = case env.resolve_params(tenv, qualified) {
-                Ok(params) -> env.with_type_params(acc4, target, params)
+              let env.TEnv(
+                _values_t,
+                tcons_src,
+                _types_t,
+                _aliases_t,
+                _modules_t,
+                _params_t,
+                _type_names_t,
+              ) = tenv
+              let acc5 = case dict.get(tcons_src, qualified) {
+                Ok(constructor) -> {
+                  let env.TEnv(
+                    values_acc,
+                    tcons_acc,
+                    types_acc,
+                    aliases_acc,
+                    modules_acc,
+                    params_acc,
+                    type_names_acc,
+                  ) = acc4
+                  env.TEnv(
+                    values_acc,
+                    dict.insert(tcons_acc, target, constructor),
+                    types_acc,
+                    aliases_acc,
+                    modules_acc,
+                    params_acc,
+                    type_names_acc,
+                  )
+                }
                 Error(_) -> acc4
               }
-              Ok(acc5)
+              let acc6 = case env.resolve_params(tenv, qualified) {
+                Ok(params) -> env.with_type_params(acc5, target, params)
+                Error(_) -> acc5
+              }
+              Ok(acc6)
             }
             Error(_) ->
               Error(type_error.new("Unknown import value " <> qualified, span))

@@ -56,14 +56,14 @@ fn infer_expr_inner(
 
     g.NegateInt(span, value) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use value_type <- is.bind(infer_expr(tenv, value))
+      use value_type <- is.bind(infer_expr_inner(tenv, value))
       use _ignored <- is.bind(unify(value_type, types.Tcon("Int", span), span))
       is.ok(types.Tcon("Int", span))
     }
 
     g.NegateBool(span, value) -> {
       let _loc = gleam_types.loc_from_span(span)
-      use value_type <- is.bind(infer_expr(tenv, value))
+      use value_type <- is.bind(infer_expr_inner(tenv, value))
       use _ignored <- is.bind(unify(value_type, types.Tcon("Bool", span), span))
       is.ok(types.Tcon("Bool", span))
     }
@@ -74,7 +74,7 @@ fn infer_expr_inner(
       let _loc = gleam_types.loc_from_span(span)
       use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr(tenv, expr))
+          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
           unify(msg_type, types.Tcon("String", span), span)
         }
         option.None -> is.ok(Nil)
@@ -86,7 +86,7 @@ fn infer_expr_inner(
       let _loc = gleam_types.loc_from_span(span)
       use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr(tenv, expr))
+          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
           unify(msg_type, types.Tcon("String", span), span)
         }
         option.None -> is.ok(Nil)
@@ -96,13 +96,13 @@ fn infer_expr_inner(
 
     g.Tuple(span, items) -> {
       use item_types <- is.bind(
-        is.map_list(items, fn(item) { infer_expr(tenv, item) }),
+        is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
       )
       is.ok(types.Ttuple(item_types, span))
     }
 
     g.TupleIndex(span, target, index) -> {
-      use target_type <- is.bind(infer_expr(tenv, target))
+      use target_type <- is.bind(infer_expr_inner(tenv, target))
       use applied_target <- is.bind(type_apply_state(target_type))
       case applied_target {
         types.Ttuple(args, _) -> tuple_index_type(args, index, span)
@@ -121,7 +121,7 @@ fn infer_expr_inner(
       use elem_type <- is.bind(new_type_var("list_item", span))
       let list_type = types.Tapp(types.Tcon("List", span), [elem_type], span)
       use item_types <- is.bind(
-        is.map_list(items, fn(item) { infer_expr(tenv, item) }),
+        is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
       )
       use _ignored <- is.bind(
         is.each_list(item_types, fn(item_type) {
@@ -131,7 +131,7 @@ fn infer_expr_inner(
       case tail {
         option.None -> type_apply_state(list_type)
         option.Some(tail_expr) -> {
-          use tail_type <- is.bind(infer_expr(tenv, tail_expr))
+          use tail_type <- is.bind(infer_expr_inner(tenv, tail_expr))
           use _ignored <- is.bind(unify(tail_type, list_type, span))
           type_apply_state(list_type)
         }
@@ -143,7 +143,7 @@ fn infer_expr_inner(
       use _ignored <- is.bind(
         is.each_list(segments, fn(segment) {
           let #(expr, _opts) = segment
-          use _ignored2 <- is.bind(infer_expr(tenv, expr))
+          use _ignored2 <- is.bind(infer_expr_inner(tenv, expr))
           use _ignored3 <- is.bind(infer_bitstring_expr_options(tenv, segment))
           is.ok(Nil)
         }),
@@ -155,7 +155,7 @@ fn infer_expr_inner(
       let _loc = gleam_types.loc_from_span(span)
       use _ignored <- is.bind(case message {
         option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr(tenv, expr))
+          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
           use _ignored2 <- is.bind(unify(
             msg_type,
             types.Tcon("String", span),
@@ -166,7 +166,7 @@ fn infer_expr_inner(
         option.None -> is.ok(Nil)
       })
       case value {
-        option.Some(expr) -> infer_expr(tenv, expr)
+        option.Some(expr) -> infer_expr_inner(tenv, expr)
         option.None -> is.ok(types.Tcon("()", span))
       }
     }
@@ -175,7 +175,7 @@ fn infer_expr_inner(
       let _loc = gleam_types.loc_from_span(span)
       use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
-      use record_type <- is.bind(infer_expr(tenv, record))
+      use record_type <- is.bind(infer_expr_inner(tenv, record))
       use _ignored <- is.bind(unify(record_type, cres, span))
       use _ignored2 <- is.bind(
         is.each_list(fields, fn(field) {
@@ -185,7 +185,7 @@ fn infer_expr_inner(
             option.Some(expr) -> expr
             option.None -> g.Variable(span, label)
           }
-          use expr_type <- is.bind(infer_expr(tenv, expr))
+          use expr_type <- is.bind(infer_expr_inner(tenv, expr))
           unify(expr_type, ctype, span)
         }),
       )
@@ -206,7 +206,7 @@ fn infer_expr_inner(
                   )
               }
             Error(_) -> {
-              use target_type <- is.bind(infer_expr(tenv, container))
+              use target_type <- is.bind(infer_expr_inner(tenv, container))
               use applied_target <- is.bind(type_apply_state(target_type))
               case applied_target {
                 types.Tvar(_, _) ->
@@ -261,7 +261,7 @@ fn infer_expr_inner(
             }
           }
         _ -> {
-          use target_type <- is.bind(infer_expr(tenv, container))
+          use target_type <- is.bind(infer_expr_inner(tenv, container))
           use applied_target <- is.bind(type_apply_state(target_type))
           case applied_target {
             types.Tvar(_, _) ->
@@ -380,10 +380,10 @@ fn infer_block(
   case statements {
     [] -> is.error("Empty block", span)
 
-    [g.Expression(expr)] -> infer_expr(tenv, expr)
+    [g.Expression(expr)] -> infer_expr_inner(tenv, expr)
 
     [g.Expression(expr), ..rest] -> {
-      use _ignored <- is.bind(infer_expr(tenv, expr))
+      use _ignored <- is.bind(infer_expr_inner(tenv, expr))
       infer_block(tenv, rest, span)
     }
 
@@ -396,11 +396,11 @@ fn infer_block(
       }
 
     [g.Assert(span, expression, message), ..rest] -> {
-      use expr_type <- is.bind(infer_expr(tenv, expression))
+      use expr_type <- is.bind(infer_expr_inner(tenv, expression))
       use _ignored <- is.bind(unify(expr_type, types.Tcon("Bool", span), span))
       use _ignored2 <- is.bind(case message {
         option.Some(msg) -> {
-          use msg_type <- is.bind(infer_expr(tenv, msg))
+          use msg_type <- is.bind(infer_expr_inner(tenv, msg))
           unify(msg_type, types.Tcon("String", span), span)
         }
         option.None -> is.ok(Nil)
@@ -517,7 +517,7 @@ fn infer_assignment(
   rest: List(g.Statement),
   span: g.Span,
 ) -> is.InferState(types.Type) {
-  use value_type <- is.bind(infer_expr(tenv, value))
+  use value_type <- is.bind(infer_expr_inner(tenv, value))
   use _ignored2 <- is.bind(case annotation {
     option.Some(type_expr) ->
       case gleam_types.type_(tenv, type_expr) {
@@ -652,7 +652,7 @@ fn infer_constructor_call(
           let #(field, cfield) = pair
           let #(_label, expr) = field
           let #(_clabel, ctype) = cfield
-          use expr_type <- is.bind(infer_expr(tenv, expr))
+          use expr_type <- is.bind(infer_expr_inner(tenv, expr))
           unify(expr_type, ctype, span)
         }),
       )
@@ -735,7 +735,7 @@ fn infer_case(
     [] -> is.error("Case subject count", span)
     _ -> {
       use subject_types <- is.bind(
-        is.map_list(subjects, fn(subject) { infer_expr(tenv, subject) }),
+        is.map_list(subjects, fn(subject) { infer_expr_inner(tenv, subject) }),
       )
       let target_type = case subject_types {
         [subject] -> subject
@@ -760,12 +760,12 @@ fn infer_case(
           let bound_env = env.with_scope(tenv, scope_applied)
           use _ignored_guard <- is.bind(case guard {
             option.Some(expr) -> {
-              use guard_type <- is.bind(infer_expr(bound_env, expr))
+              use guard_type <- is.bind(infer_expr_inner(bound_env, expr))
               unify(guard_type, types.Tcon("Bool", span), span)
             }
             option.None -> is.ok(Nil)
           })
-          use body_type <- is.bind(infer_expr(bound_env, body))
+          use body_type <- is.bind(infer_expr_inner(bound_env, body))
           use subst <- is.bind(get_subst_state())
           use _ignored2 <- is.bind(unify(
             types.type_apply(subst, result),
@@ -858,31 +858,31 @@ fn infer_binary_operator(
 ) -> is.InferState(types.Type) {
   case op {
     g.And | g.Or -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("Bool", span), span))
       use _ignored2 <- is.bind(unify(right_type, types.Tcon("Bool", span), span))
       is.ok(types.Tcon("Bool", span))
     }
 
     g.Eq | g.NotEq -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, right_type, span))
       is.ok(types.Tcon("Bool", span))
     }
 
     g.LtInt | g.LtEqInt | g.GtInt | g.GtEqInt -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("Int", span), span))
       use _ignored2 <- is.bind(unify(right_type, types.Tcon("Int", span), span))
       is.ok(types.Tcon("Bool", span))
     }
 
     g.LtFloat | g.LtEqFloat | g.GtFloat | g.GtEqFloat -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("Float", span), span))
       use _ignored2 <- is.bind(unify(
         right_type,
@@ -893,16 +893,16 @@ fn infer_binary_operator(
     }
 
     g.AddInt | g.SubInt | g.MultInt | g.DivInt | g.RemainderInt -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("Int", span), span))
       use _ignored2 <- is.bind(unify(right_type, types.Tcon("Int", span), span))
       is.ok(types.Tcon("Int", span))
     }
 
     g.AddFloat | g.SubFloat | g.MultFloat | g.DivFloat -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("Float", span), span))
       use _ignored2 <- is.bind(unify(
         right_type,
@@ -913,8 +913,8 @@ fn infer_binary_operator(
     }
 
     g.Concatenate -> {
-      use left_type <- is.bind(infer_expr(tenv, left))
-      use right_type <- is.bind(infer_expr(tenv, right))
+      use left_type <- is.bind(infer_expr_inner(tenv, left))
+      use right_type <- is.bind(infer_expr_inner(tenv, right))
       use _ignored <- is.bind(unify(left_type, types.Tcon("String", span), span))
       use _ignored2 <- is.bind(unify(
         right_type,
@@ -924,7 +924,7 @@ fn infer_binary_operator(
       is.ok(types.Tcon("String", span))
     }
 
-    g.Pipe -> infer_expr(tenv, pipe_to_call(tenv, span, left, right))
+    g.Pipe -> infer_expr_inner(tenv, pipe_to_call(tenv, span, left, right))
   }
 }
 
@@ -1386,7 +1386,7 @@ fn infer_bitstring_expr_options(
   is.each_list(options, fn(opt) {
     case opt {
       g.SizeValueOption(expr) -> {
-        use _ignored <- is.bind(infer_expr(tenv, expr))
+        use _ignored <- is.bind(infer_expr_inner(tenv, expr))
         is.ok(Nil)
       }
       _ -> is.ok(Nil)
