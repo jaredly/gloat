@@ -1,0 +1,55 @@
+import glance as g
+import gloat/builtins
+import gloat/env
+import gloat/infer
+import gloat/infer_state as is
+import gloat/scheme
+import gloat/type_error
+import gloat/types
+
+pub type Expr =
+  g.Expression
+
+pub type Pat =
+  g.Pattern
+
+pub type Module =
+  g.Module
+
+pub type Type =
+  types.Type
+
+pub type Scheme =
+  scheme.Scheme
+
+pub type TEnv =
+  env.TEnv
+
+pub type TypeError =
+  type_error.TypeError
+
+pub fn builtin_env() -> env.TEnv {
+  builtins.builtin_env()
+}
+
+pub fn add_module(
+  tenv: env.TEnv,
+  module: g.Module,
+) -> Result(env.TEnv, type_error.TypeError) {
+  builtins.add_module(tenv, module)
+}
+
+pub fn infer_expr(
+  tenv: env.TEnv,
+  expr: g.Expression,
+) -> Result(types.Type, type_error.TypeError) {
+  is.run_empty(infer.infer_expr(tenv, expr))
+}
+
+pub fn type_to_string(type_: types.Type) -> String {
+  types.type_to_string(type_)
+}
+
+pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
+  scheme.scheme_to_string(scheme_)
+}

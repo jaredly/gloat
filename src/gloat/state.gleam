@@ -1,5 +1,5 @@
 import gleam/dict
-import typechecker/types
+import gloat/types
 
 pub type StateData =
   #(Int, dict.Dict(String, types.Type))

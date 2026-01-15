@@ -4,8 +4,9 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
-import typechecker/ast
-import typechecker/types
+import gleam/string
+import gloat/ast
+import gloat/types
 
 pub type Error {
   Unsupported(String)
@@ -91,20 +92,20 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
       map2(
         expression(function),
         field_arguments(arguments),
-        fn(func_expr, args) { ast.Eapp(func_expr, args, loc_from_span(span)) },
+        fn(func_expr, args) { call_with_fields(func_expr, args, span) },
       )
+      |> result.flatten
 
     g.Fn(span, arguments, _return_annotation, body) ->
       map2(
         fn_parameters(arguments),
-        block_to_expression(body, loc_from_span(span)),
+        block_to_expression(body, span),
         fn(params, body_expr) {
           ast.Elambda(params, body_expr, loc_from_span(span))
         },
       )
 
-    g.Block(span, statements) ->
-      block_to_expression(statements, loc_from_span(span))
+    g.Block(span, statements) -> block_to_expression(statements, span)
 
     g.BinaryOperator(span, op, left, right) ->
       map2(expression(left), expression(right), fn(left_expr, right_expr) {
@@ -117,13 +118,14 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
           g.GtEqInt -> Ok(">=")
           g.Eq -> Ok("=")
           g.NotEq -> Ok("!=")
-          _ -> Error(Unsupported("binary operator"))
+          g.Concatenate -> Ok("<>")
+          g.Pipe -> Ok("|>")
+          _ -> Error(Unsupported("binary operator " <> string.inspect(op)))
         }
 
         result.map(name, fn(n) {
           let loc = loc_from_span(span)
-          let applied_left = ast.Eapp(ast.Evar(n, loc), [left_expr], loc)
-          ast.Eapp(applied_left, [right_expr], loc)
+          ast.Eapp(ast.Evar(n, loc), [left_expr, right_expr], loc)
         })
       })
       |> result.flatten
@@ -179,19 +181,47 @@ pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
 
     g.Case(span, subjects, clauses) ->
       case subjects {
-        [subject] ->
+        [] -> Error(Unsupported("case subject count"))
+        _ ->
           map2(
-            expression(subject),
-            result.all(list.map(clauses, clause_to_case)),
-            fn(target_expr, cases) {
+            result.all(list.map(subjects, expression)),
+            result.map(
+              result.all(
+                list.map(clauses, fn(clause) {
+                  clause_to_cases(clause, list.length(subjects), span)
+                }),
+              ),
+              list.flatten,
+            ),
+            fn(subject_exprs, cases) {
+              let target_expr = case subject_exprs {
+                [subject] -> subject
+                _ -> ast.Etuple(subject_exprs, loc_from_span(span))
+              }
               ast.Ematch(target_expr, cases, loc_from_span(span))
             },
           )
-        _ -> Error(Unsupported("case subject count"))
       }
 
-    g.RecordUpdate(_, _, _, _, _) | g.FieldAccess(_, _, _) ->
-      Error(Unsupported("expression"))
+    g.RecordUpdate(span, module, constructor, record, fields) ->
+      map2(
+        expression(record),
+        record_update_fields(fields),
+        fn(record_expr, update_fields) {
+          ast.ErecordUpdate(
+            module,
+            constructor,
+            record_expr,
+            update_fields,
+            loc_from_span(span),
+          )
+        },
+      )
+
+    g.FieldAccess(span, container, label) ->
+      result.map(expression(container), fn(expr) {
+        ast.Efield(expr, label, loc_from_span(span))
+      })
   }
 }
 
@@ -255,7 +285,6 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
 
     g.PatternVariant(span, module, constructor, arguments, with_spread) ->
       case module, with_spread {
-        option.Some(_), _ -> Error(Unsupported("qualified constructor"))
         _, True -> Error(Unsupported("spread pattern"))
         _, False ->
           result.map(field_patterns(arguments), fn(args) {
@@ -270,23 +299,51 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
   }
 }
 
-fn clause_to_case(
+fn clause_to_cases(
   clause: g.Clause,
-) -> Result(#(ast.Pat, option.Option(ast.Expr), ast.Expr), Error) {
+  subject_count: Int,
+  span: g.Span,
+) -> Result(List(#(ast.Pat, option.Option(ast.Expr), ast.Expr)), Error) {
   let g.Clause(patterns, guard, body) = clause
-  case patterns {
-    [[single]] ->
-      map2(
-        pattern(single),
-        map2(option_expr(guard), expression(body), fn(guard, body_expr) {
-          #(guard, body_expr)
-        }),
-        fn(pat, pair) {
-          let #(guard, body_expr) = pair
-          #(pat, guard, body_expr)
-        },
-      )
-    _ -> Error(Unsupported("case patterns"))
+  map2(
+    result.all(
+      list.map(patterns, fn(patterns) {
+        patterns_to_pat(patterns, subject_count, span)
+      }),
+    ),
+    map2(option_expr(guard), expression(body), fn(guard, body_expr) {
+      #(guard, body_expr)
+    }),
+    fn(pats, guard_body) {
+      let #(guard, body_expr) = guard_body
+      list.map(pats, fn(pat) { #(pat, guard, body_expr) })
+    },
+  )
+}
+
+fn patterns_to_pat(
+  patterns: List(g.Pattern),
+  subject_count: Int,
+  span: g.Span,
+) -> Result(ast.Pat, Error) {
+  case subject_count {
+    1 ->
+      case patterns {
+        [single] -> pattern(single)
+        _ -> Error(Unsupported("case patterns"))
+      }
+    _ ->
+      case patterns {
+        [] -> Error(Unsupported("case patterns"))
+        _ ->
+          case list.length(patterns) == subject_count {
+            True ->
+              result.map(result.all(list.map(patterns, pattern)), fn(pats) {
+                ast.Ptuple(pats, loc_from_span(span))
+              })
+            False -> Error(Unsupported("case patterns"))
+          }
+      }
   }
 }
 
@@ -301,15 +358,15 @@ fn pattern_list_tail(
 
 fn block_to_expression(
   statements: List(g.Statement),
-  loc: Int,
+  span: g.Span,
 ) -> Result(ast.Expr, Error) {
-  block_to_expression_loop(statements, [], loc)
+  block_to_expression_loop(statements, [], span)
 }
 
 fn block_to_expression_loop(
   statements: List(g.Statement),
   bindings: List(#(ast.Pat, ast.Expr)),
-  loc: Int,
+  span: g.Span,
 ) -> Result(ast.Expr, Error) {
   case statements {
     [] -> Error(Unsupported("empty block"))
@@ -318,7 +375,7 @@ fn block_to_expression_loop(
       result.map(expression(expr), fn(body_expr) {
         case bindings {
           [] -> body_expr
-          _ -> ast.Elet(list.reverse(bindings), body_expr, loc)
+          _ -> ast.Elet(list.reverse(bindings), body_expr, span)
         }
       })
 
@@ -331,7 +388,7 @@ fn block_to_expression_loop(
             block_to_expression_loop(
               rest,
               [#(pat_expr, value_expr), ..bindings],
-              loc,
+              span,
             )
           })
           |> result.flatten
@@ -482,38 +539,119 @@ fn fn_capture_to_expr(
         ),
         fn(func_expr, args) {
           let #(before, after) = args
-          let loc = loc_from_span(span)
-          let capture_name = "capture"
-          let hole = ast.Evar(capture_name, loc)
-          let applied =
-            ast.Eapp(func_expr, list.append(before, [hole, ..after]), loc)
-          ast.Elambda([ast.Pvar(capture_name, loc)], applied, loc)
+          case
+            list.any(before, fn(arg) {
+              let #(label, _expr) = arg
+              label != option.None
+            })
+            || list.any(after, fn(arg) {
+              let #(label, _expr) = arg
+              label != option.None
+            })
+          {
+            True -> Error(Unsupported("labelled capture arguments"))
+            False -> {
+              let before_args =
+                list.map(before, fn(arg) {
+                  let #(_label, expr) = arg
+                  expr
+                })
+              let after_args =
+                list.map(after, fn(arg) {
+                  let #(_label, expr) = arg
+                  expr
+                })
+              let loc = loc_from_span(span)
+              let capture_name = "capture"
+              let hole = ast.Evar(capture_name, loc)
+              let applied =
+                ast.Eapp(
+                  func_expr,
+                  list.append(before_args, [hole, ..after_args]),
+                  loc,
+                )
+              Ok(ast.Elambda([ast.Pvar(capture_name, loc)], applied, loc))
+            }
+          }
         },
       )
+      |> result.flatten
   }
 }
 
 fn field_arguments(
   fields: List(g.Field(g.Expression)),
-) -> Result(List(ast.Expr), Error) {
+) -> Result(List(#(option.Option(String), ast.Expr)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.UnlabelledField(item) -> expression(item)
-      g.LabelledField(_, _, _) -> Error(Unsupported("labelled arguments"))
-      g.ShorthandField(_, _) -> Error(Unsupported("shorthand arguments"))
+      g.UnlabelledField(item) ->
+        result.map(expression(item), fn(expr) { #(option.None, expr) })
+      g.LabelledField(label, _loc, item) ->
+        result.map(expression(item), fn(expr) { #(option.Some(label), expr) })
+      g.ShorthandField(label, loc) ->
+        Ok(#(option.Some(label), ast.Evar(label, loc_from_span(loc))))
     }
   })
   |> result.all
 }
 
+fn call_with_fields(
+  func_expr: ast.Expr,
+  args: List(#(option.Option(String), ast.Expr)),
+  span: g.Span,
+) -> Result(ast.Expr, Error) {
+  case
+    list.all(args, fn(arg) {
+      let #(label, _expr) = arg
+      label == option.None
+    })
+  {
+    True ->
+      Ok(ast.Eapp(
+        func_expr,
+        list.map(args, fn(arg) {
+          let #(_label, expr) = arg
+          expr
+        }),
+        loc_from_span(span),
+      ))
+    False ->
+      case func_expr {
+        ast.Evar(name, _) ->
+          Ok(ast.Erecord(option.None, name, args, loc_from_span(span)))
+        ast.Efield(ast.Evar(module, _), name, _) ->
+          Ok(ast.Erecord(option.Some(module), name, args, loc_from_span(span)))
+        _ -> Error(Unsupported("labelled arguments"))
+      }
+  }
+}
+
+fn record_update_fields(
+  fields: List(g.RecordUpdateField(g.Expression)),
+) -> Result(List(#(String, ast.Expr)), Error) {
+  result.all(
+    list.map(fields, fn(field) {
+      let g.RecordUpdateField(label, item) = field
+      case item {
+        option.Some(expr) ->
+          result.map(expression(expr), fn(expr) { #(label, expr) })
+        option.None -> Ok(#(label, ast.Evar(label, ast.unknown_loc)))
+      }
+    }),
+  )
+}
+
 fn field_patterns(
   fields: List(g.Field(g.Pattern)),
-) -> Result(List(ast.Pat), Error) {
+) -> Result(List(#(option.Option(String), ast.Pat)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.UnlabelledField(item) -> pattern(item)
-      g.LabelledField(_, _, _) -> Error(Unsupported("labelled constructor"))
-      g.ShorthandField(_, _) -> Error(Unsupported("shorthand constructor"))
+      g.UnlabelledField(item) ->
+        result.map(pattern(item), fn(pat) { #(option.None, pat) })
+      g.LabelledField(label, _loc, item) ->
+        result.map(pattern(item), fn(pat) { #(option.Some(label), pat) })
+      g.ShorthandField(label, loc) ->
+        Ok(#(option.Some(label), ast.Pvar(label, loc_from_span(loc))))
     }
   })
   |> result.all
@@ -523,8 +661,8 @@ fn fn_parameters(params: List(g.FnParameter)) -> Result(List(ast.Pat), Error) {
   list.map(params, fn(param) {
     let g.FnParameter(name, _type_) = param
     case name {
-      g.Named(name) -> Ok(ast.Pvar(name, 0))
-      g.Discarded(_) -> Ok(ast.Pany(0))
+      g.Named(name) -> Ok(ast.Pvar(name, ast.unknown_loc))
+      g.Discarded(_) -> Ok(ast.Pany(ast.unknown_loc))
     }
   })
   |> result.all
@@ -555,10 +693,10 @@ fn definition_to_function(
     [] ->
       map2(
         function_parameters(parameters),
-        block_to_expression(body, loc_from_span(span)),
+        block_to_expression(body, span),
         fn(params, body_expr) {
-          let expr = ast.Elambda(params, body_expr, loc_from_span(span))
-          ast.Tdef(name, loc_from_span(span), expr, loc_from_span(span))
+          let expr = ast.Elambda(params, body_expr, span)
+          ast.Tdef(name, span, expr, span)
         },
       )
     _ -> Error(Unsupported("labelled parameters"))
@@ -604,7 +742,10 @@ fn definition_to_custom_type(
 fn custom_variants(
   variants: List(g.Variant),
   span: g.Span,
-) -> Result(List(#(String, Int, List(types.Type), Int)), Error) {
+) -> Result(
+  List(#(String, g.Span, List(#(option.Option(String), types.Type)), g.Span)),
+  Error,
+) {
   list.map(variants, fn(variant) {
     let g.Variant(name, fields, _attributes) = variant
     result.map(variant_fields(fields), fn(field_types) {
@@ -616,11 +757,13 @@ fn custom_variants(
 
 fn variant_fields(
   fields: List(g.VariantField),
-) -> Result(List(types.Type), Error) {
+) -> Result(List(#(option.Option(String), types.Type)), Error) {
   list.map(fields, fn(field) {
     case field {
-      g.LabelledVariantField(type_expr, _label) -> type_(type_expr)
-      g.UnlabelledVariantField(type_expr) -> type_(type_expr)
+      g.LabelledVariantField(type_expr, label) ->
+        result.map(type_(type_expr), fn(type_) { #(option.Some(label), type_) })
+      g.UnlabelledVariantField(type_expr) ->
+        result.map(type_(type_expr), fn(type_) { #(option.None, type_) })
     }
   })
   |> result.all
@@ -632,8 +775,8 @@ fn function_parameters(
   list.map(params, fn(param) {
     let g.FunctionParameter(_label, name, _type_) = param
     case name {
-      g.Named(name) -> Ok(ast.Pvar(name, 0))
-      g.Discarded(_) -> Ok(ast.Pany(0))
+      g.Named(name) -> Ok(ast.Pvar(name, ast.unknown_loc))
+      g.Discarded(_) -> Ok(ast.Pany(ast.unknown_loc))
     }
   })
   |> result.all
@@ -644,31 +787,33 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
     g.NamedType(span, name, module, parameters) ->
       case module {
         option.Some(_) -> Error(Unsupported("qualified type"))
-        option.None ->
+        option.None -> {
+          let resolved = case name {
+            "BitArray" -> "BitString"
+            _ -> name
+          }
           result.map(result.all(list.map(parameters, type_)), fn(params) {
-            list.fold(
-              params,
-              types.Tcon(name, loc_from_span(span)),
-              fn(acc, param) { types.Tapp(acc, param, loc_from_span(span)) },
-            )
+            case params {
+              [] -> types.Tcon(resolved, span)
+              _ -> types.Tapp(types.Tcon(resolved, span), params, span)
+            }
           })
+        }
       }
 
-    g.VariableType(span, name) -> Ok(types.Tvar(name, loc_from_span(span)))
+    g.VariableType(span, name) -> Ok(types.Tvar(name, span))
 
     g.FunctionType(span, parameters, return_type) ->
       map2(
         result.all(list.map(parameters, type_)),
         type_(return_type),
-        fn(args, result_type) {
-          types.tfns(args, result_type, loc_from_span(span))
-        },
+        fn(args, result_type) { types.Tfn(args, result_type, span) },
       )
 
     g.TupleType(span, elements) ->
       result.map(result.all(list.map(elements, type_)), fn(types_) {
         case types_ {
-          [_, ..] -> Ok(types.Ttuple(types_, loc_from_span(span)))
+          [_, ..] -> Ok(types.Ttuple(types_, span))
           _ -> Error(Unsupported("tuple type arity"))
         }
       })
@@ -678,9 +823,8 @@ pub fn type_(type_expr: g.Type) -> Result(types.Type, Error) {
   }
 }
 
-fn loc_from_span(span: g.Span) -> Int {
-  let g.Span(start, _end) = span
-  start
+fn loc_from_span(span: g.Span) -> g.Span {
+  span
 }
 
 fn map2(a: Result(x, e), b: Result(y, e), f: fn(x, y) -> z) -> Result(z, e) {

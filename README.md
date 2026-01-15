@@ -1,20 +1,22 @@
-# typechecker
+# gloat
 
-[![Package Version](https://img.shields.io/hexpm/v/typechecker)](https://hex.pm/packages/typechecker)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/typechecker/)
+[![Package Version](https://img.shields.io/hexpm/v/gloat)](https://hex.pm/packages/gloat)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/gloat/)
+
+A typechecker for gleam code, written in gleam! To be a concrete, practical example of a modern typechecker.
 
 ```sh
-gleam add typechecker@1
+gleam add gloat@1
 ```
 ```gleam
-import typechecker
+import gloat
 
 pub fn main() -> Nil {
   // TODO: An example of the project in use
 }
 ```
 
-Further documentation can be found at <https://hexdocs.pm/typechecker>.
+Further documentation can be found at <https://hexdocs.pm/gloat>.
 
 ## Development
 

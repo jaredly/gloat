@@ -1,7 +1,7 @@
 import gleam/dict
 import gleam/set
 import gleam/string
-import typechecker/types
+import gloat/types
 
 pub type Scheme {
   Forall(set.Set(String), types.Type)
