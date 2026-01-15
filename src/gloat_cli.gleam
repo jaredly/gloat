@@ -18,7 +18,7 @@ import gloat/types
 
 pub fn main() {
   case parse_args(start_arguments()) {
-    Ok(#(path, lib_dirs)) -> infer_file(path, lib_dirs)
+    Ok(#(path, lib_dirs, target)) -> infer_file(path, lib_dirs, target)
     Error(message) -> {
       io.println_error(message)
       usage()
@@ -27,20 +27,28 @@ pub fn main() {
 }
 
 fn usage() {
-  io.println_error("Usage: gloat_cli <file.gleam> [<lib_dir> ...]")
+  io.println_error(
+    "Usage: gloat_cli <file.gleam> [--target <erlang|javascript>] [<lib_dir> ...]",
+  )
 }
 
-fn infer_file(path: String, lib_dirs: List(String)) {
+fn infer_file(path: String, lib_dirs: List(String), target: String) {
   case read_file_text(path) {
-    Ok(src) -> infer_source(src, path, lib_dirs)
+    Ok(src) -> infer_source(src, path, lib_dirs, target)
     Error(message) -> io.println_error("Failed to read file: " <> message)
   }
 }
 
-fn infer_source(src: String, path: String, lib_dirs: List(String)) {
+fn infer_source(
+  src: String,
+  path: String,
+  lib_dirs: List(String),
+  target: String,
+) {
   case glance.module(src) {
     Error(error) -> io.println_error(format_parse_error(path, src, error))
     Ok(parsed) -> {
+      let parsed = filter_module_for_target(parsed, target)
       let search_dirs = [dir_of_path(path), ..lib_dirs]
       let glance.Module(
         imports,
@@ -74,7 +82,7 @@ fn infer_source(src: String, path: String, lib_dirs: List(String)) {
         [] -> io.println("No top-level definitions found.")
         _ -> {
           let env_ = gloat.builtin_env()
-          case load_imports(env_, imports, search_dirs, set.new()) {
+          case load_imports(env_, imports, search_dirs, set.new(), target) {
             Error(message) -> io.println_error(message)
             Ok(#(env_loaded, _visited)) -> {
               case gloat.add_module(env_loaded, parsed) {
@@ -110,25 +118,33 @@ fn infer_source(src: String, path: String, lib_dirs: List(String)) {
   }
 }
 
-fn parse_args(args: List(String)) -> Result(#(String, List(String)), String) {
+fn parse_args(
+  args: List(String),
+) -> Result(#(String, List(String), String), String) {
   case args {
     [] -> Error("Missing file path.")
     [path, ..rest] ->
-      result.map(parse_lib_dirs(rest, []), fn(dirs) { #(path, dirs) })
+      result.map(parse_lib_dirs(rest, [], "erlang"), fn(parsed) {
+        let #(dirs, target) = parsed
+        #(path, dirs, target)
+      })
   }
 }
 
 fn parse_lib_dirs(
   args: List(String),
   acc: List(String),
-) -> Result(List(String), String) {
+  target: String,
+) -> Result(#(List(String), String), String) {
   case args {
-    [] -> Ok(list.reverse(acc))
-    ["--lib", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc])
-    ["-I", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc])
+    [] -> Ok(#(list.reverse(acc), target))
+    ["--target", target_name, ..rest] -> parse_lib_dirs(rest, acc, target_name)
+    ["-t", target_name, ..rest] -> parse_lib_dirs(rest, acc, target_name)
+    ["--lib", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
+    ["-I", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
     ["--lib"] -> Error("Missing directory after --lib")
     ["-I"] -> Error("Missing directory after -I")
-    [dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc])
+    [dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
   }
 }
 
@@ -137,6 +153,7 @@ fn load_imports(
   imports: List(glance.Definition(glance.Import)),
   search_dirs: List(String),
   visited: set.Set(String),
+  target: String,
 ) -> Result(#(env.TEnv, set.Set(String)), String) {
   case imports {
     [] -> Ok(#(tenv, visited))
@@ -144,10 +161,10 @@ fn load_imports(
       let glance.Definition(_attrs, import_) = defn
       let glance.Import(_loc, module_name, _alias, _types, _values) = import_
       result.try(
-        load_module(tenv, module_name, search_dirs, visited),
+        load_module(tenv, module_name, search_dirs, visited, target),
         fn(state) {
           let #(env_loaded, visited_loaded) = state
-          load_imports(env_loaded, rest, search_dirs, visited_loaded)
+          load_imports(env_loaded, rest, search_dirs, visited_loaded, target)
         },
       )
     }
@@ -159,6 +176,7 @@ fn load_module(
   module_name: String,
   search_dirs: List(String),
   visited: set.Set(String),
+  target: String,
 ) -> Result(#(env.TEnv, set.Set(String)), String) {
   case set.contains(visited, module_name) {
     True -> Ok(#(tenv, visited))
@@ -171,10 +189,11 @@ fn load_module(
             format_parse_error(path, src, error)
           }),
           fn(parsed) {
+            let parsed = filter_module_for_target(parsed, target)
             let glance.Module(imports, _custom_types, _type_aliases, _, _) =
               parsed
             result.try(
-              load_imports(tenv, imports, search_dirs, visited),
+              load_imports(tenv, imports, search_dirs, visited, target),
               fn(loaded) {
                 let #(env_loaded, visited_loaded) = loaded
                 result.try(
@@ -245,6 +264,56 @@ fn module_exports_env(
       ))
     },
   )
+}
+
+fn filter_module_for_target(
+  module: glance.Module,
+  target: String,
+) -> glance.Module {
+  let glance.Module(imports, custom_types, type_aliases, constants, functions) =
+    module
+  glance.Module(
+    list.filter(imports, fn(defn) { definition_matches_target(defn, target) }),
+    list.filter(custom_types, fn(defn) {
+      definition_matches_target(defn, target)
+    }),
+    list.filter(type_aliases, fn(defn) {
+      definition_matches_target(defn, target)
+    }),
+    list.filter(constants, fn(defn) { definition_matches_target(defn, target) }),
+    list.filter(functions, fn(defn) { definition_matches_target(defn, target) }),
+  )
+}
+
+fn definition_matches_target(defn: glance.Definition(a), target: String) -> Bool {
+  let glance.Definition(attributes, _definition) = defn
+  case target_from_attrs(attributes) {
+    option.None -> True
+    option.Some(target_name) -> target_name == target
+  }
+}
+
+fn target_from_attrs(attrs: List(glance.Attribute)) -> option.Option(String) {
+  list.fold(attrs, option.None, fn(acc, attr) {
+    case acc {
+      option.Some(_) -> acc
+      option.None -> {
+        let glance.Attribute(name, arguments) = attr
+        case name {
+          "target" -> target_from_args(arguments)
+          _ -> option.None
+        }
+      }
+    }
+  })
+}
+
+fn target_from_args(args: List(glance.Expression)) -> option.Option(String) {
+  case args {
+    [glance.Variable(_, name)] -> option.Some(name)
+    [glance.String(_, name)] -> option.Some(name)
+    _ -> option.None
+  }
 }
 
 fn qualified_values(
