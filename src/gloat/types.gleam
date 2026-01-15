@@ -231,7 +231,11 @@ fn alphabet_letter(idx: Int) -> String {
 fn type_to_string_gleam_inner(type_: Type) -> String {
   case type_ {
     Tvar(name, _) -> name
-    Tcon(name, _) -> name
+    Tcon(name, _) ->
+      case name {
+        "BitString" -> "BitArray"
+        _ -> name
+      }
     Ttuple(args, _) ->
       "#("
       <> string.join(list.map(args, type_to_string_gleam_inner), with: ", ")

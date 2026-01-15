@@ -10,6 +10,7 @@ import gloat/env
 import gloat/exhaustive
 import gloat/gleam_types
 import gloat/infer_state as is
+import gloat/literals
 import gloat/scheme
 import gloat/state
 import gloat/types
@@ -31,8 +32,7 @@ fn infer_expr_inner(
 ) -> is.InferState(types.Type) {
   case expr {
     g.Int(span, value) -> {
-      let normalized = string.replace(value, "_", "")
-      case int.parse(normalized) {
+      case literals.parse_int_literal(value) {
         Ok(_) -> is.ok(types.Tcon("Int", span))
         Error(_) -> is.error("Invalid int literal", span)
       }
@@ -531,12 +531,19 @@ fn infer_assignment(
       }
     option.None -> is.ok(Nil)
   })
+  let is_empty = case rest {
+    [] -> True
+    _ -> False
+  }
   case pat {
     g.PatternVariable(_span, name) -> {
       use applied_env <- is.bind(tenv_apply_state(tenv))
       let scheme_ = env.generalize(applied_env, value_type)
       let bound_env = env.with_type(applied_env, name, scheme_)
-      infer_block(bound_env, rest, span)
+      case is_empty {
+        True -> type_apply_state(value_type)
+        False -> infer_block(bound_env, rest, span)
+      }
     }
     _ -> {
       use tuple <- is.bind(infer_pattern(tenv, pat))
@@ -544,7 +551,10 @@ fn infer_assignment(
       use _ignored <- is.bind(unify(type_, value_type, span))
       use scope_applied <- is.bind(scope_apply_state(scope))
       let bound_env = env.with_scope(tenv, scope_applied)
-      infer_block(bound_env, rest, span)
+      case is_empty {
+        True -> type_apply_state(value_type)
+        False -> infer_block(bound_env, rest, span)
+      }
     }
   }
 }
@@ -569,7 +579,6 @@ fn infer_call(
           let #(_label, expr) = arg
           expr
         })
-      use result_var <- is.bind(new_type_var("result", span))
       use target_type <- is.bind(infer_expr_inner(tenv, function))
       use arg_types <- is.bind(
         is.map_list(exprs, fn(expr) {
@@ -578,12 +587,70 @@ fn infer_call(
         }),
       )
       use target_type_applied <- is.bind(type_apply_state(target_type))
-      use _ignored <- is.bind(unify(
-        target_type_applied,
-        types.Tfn(arg_types, result_var, span),
-        span,
-      ))
-      type_apply_state(result_var)
+      apply_call_args(target_type_applied, arg_types, span)
+    }
+  }
+}
+
+fn apply_call_args(
+  target_type: types.Type,
+  arg_types: List(types.Type),
+  span: g.Span,
+) -> is.InferState(types.Type) {
+  case arg_types {
+    [] -> is.ok(target_type)
+    _ ->
+      case target_type {
+        types.Tfn(fn_args, fn_result, _fn_span) -> {
+          let arg_count = list.length(arg_types)
+          let fn_count = list.length(fn_args)
+          case arg_count <= fn_count {
+            True -> {
+              let #(prefix, remaining) = split_list_at(fn_args, arg_count)
+              use _ignored <- is.bind(
+                is.each_list(list.zip(prefix, arg_types), fn(pair) {
+                  let #(fn_arg, call_arg) = pair
+                  unify(fn_arg, call_arg, span)
+                }),
+              )
+              case remaining {
+                [] -> type_apply_state(fn_result)
+                _ -> is.ok(types.Tfn(remaining, fn_result, span))
+              }
+            }
+            False -> {
+              let #(prefix, rest_args) = split_list_at(arg_types, fn_count)
+              use _ignored <- is.bind(
+                is.each_list(list.zip(fn_args, prefix), fn(pair) {
+                  let #(fn_arg, call_arg) = pair
+                  unify(fn_arg, call_arg, span)
+                }),
+              )
+              use result_applied <- is.bind(type_apply_state(fn_result))
+              apply_call_args(result_applied, rest_args, span)
+            }
+          }
+        }
+        _ -> {
+          use result_var <- is.bind(new_type_var("result", span))
+          use _ignored <- is.bind(unify(
+            target_type,
+            types.Tfn(arg_types, result_var, span),
+            span,
+          ))
+          type_apply_state(result_var)
+        }
+      }
+  }
+}
+
+fn split_list_at(items: List(a), count: Int) -> #(List(a), List(a)) {
+  case count <= 0, items {
+    True, _ -> #([], items)
+    False, [] -> #([], [])
+    False, [first, ..rest] -> {
+      let #(prefix, remaining) = split_list_at(rest, count - 1)
+      #([first, ..prefix], remaining)
     }
   }
 }
@@ -1112,7 +1179,7 @@ pub fn infer_pattern(
       is.ok(#(types.Tcon("String", span), dict.new()))
 
     g.PatternInt(span, value) ->
-      case int.parse(value) {
+      case literals.parse_int_literal(value) {
         Ok(_) -> is.ok(#(types.Tcon("Int", span), dict.new()))
         Error(_) -> is.error("Invalid int pattern", span)
       }
@@ -1203,7 +1270,7 @@ pub fn infer_pattern(
     g.PatternBitString(span, segments) -> {
       use scopes <- is.bind(
         is.map_list(segments, fn(segment) {
-          infer_bitstring_pat_segment(tenv, segment)
+          infer_bitstring_pat_segment(tenv, span, segment)
         }),
       )
       let scope =
@@ -1401,11 +1468,14 @@ fn infer_bitstring_expr_options(
 
 fn infer_bitstring_pat_segment(
   tenv: env.TEnv,
+  span: g.Span,
   segment: #(g.Pattern, List(g.BitStringSegmentOption(g.Pattern))),
 ) -> is.InferState(dict.Dict(String, scheme.Scheme)) {
   let #(pat, options) = segment
   use tuple <- is.bind(infer_pattern(tenv, pat))
-  let #(_type, scope) = tuple
+  let #(pat_type, scope) = tuple
+  let segment_type = bitstring_segment_type(options, span)
+  use _ignored <- is.bind(unify(pat_type, segment_type, span))
   use option_scope <- is.bind(infer_bitstring_pat_options(tenv, options))
   is.ok(dict.merge(scope, option_scope))
 }
@@ -1424,6 +1494,61 @@ fn infer_bitstring_pat_options(
       _ -> is.ok(acc)
     }
   })
+}
+
+fn bitstring_segment_type(
+  options: List(g.BitStringSegmentOption(g.Pattern)),
+  span: g.Span,
+) -> types.Type {
+  case
+    {
+      has_option(options, fn(opt) {
+        case opt {
+          g.FloatOption -> True
+          _ -> False
+        }
+      })
+    }
+  {
+    True -> types.Tcon("Float", span)
+    False ->
+      case
+        {
+          has_option(options, fn(opt) {
+            case opt {
+              g.Utf8CodepointOption -> True
+              g.Utf16CodepointOption -> True
+              g.Utf32CodepointOption -> True
+              _ -> False
+            }
+          })
+        }
+      {
+        True -> types.Tcon("UtfCodepoint", span)
+        False ->
+          case
+            {
+              has_option(options, fn(opt) {
+                case opt {
+                  g.BytesOption -> True
+                  g.BitsOption -> True
+                  _ -> False
+                }
+              })
+            }
+          {
+            True -> types.Tcon("BitString", span)
+            False -> types.Tcon("Int", span)
+          }
+      }
+  }
+}
+
+fn has_option(
+  options: List(g.BitStringSegmentOption(g.Pattern)),
+  predicate: fn(g.BitStringSegmentOption(g.Pattern)) -> Bool,
+) -> Bool {
+  list.any(options, predicate)
 }
 
 pub fn instantiate_tcon(

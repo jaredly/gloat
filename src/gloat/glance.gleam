@@ -1,11 +1,11 @@
 import glance as g
 import gleam/float
-import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gloat/ast
+import gloat/literals
 import gloat/types
 
 pub type Error {
@@ -29,7 +29,7 @@ pub fn module_to_tops(module: g.Module) -> Result(List(ast.Top), Error) {
 pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
   case expr {
     g.Int(span, value) ->
-      case int.parse(value) {
+      case literals.parse_int_literal(value) {
         Ok(int_value) ->
           Ok(ast.Eprim(
             ast.Pint(int_value, loc_from_span(span)),
@@ -230,7 +230,7 @@ pub fn pattern(pat: g.Pattern) -> Result(ast.Pat, Error) {
     g.PatternVariable(span, name) -> Ok(ast.Pvar(name, loc_from_span(span)))
     g.PatternDiscard(span, _name) -> Ok(ast.Pany(loc_from_span(span)))
     g.PatternInt(span, value) ->
-      case int.parse(value) {
+      case literals.parse_int_literal(value) {
         Ok(int_value) ->
           Ok(ast.Pprim(
             ast.Pint(int_value, loc_from_span(span)),
