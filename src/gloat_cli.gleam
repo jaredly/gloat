@@ -18,7 +18,10 @@ import gloat/types
 
 pub fn main() {
   case parse_args(start_arguments()) {
-    Ok(#(path, lib_dirs, target)) -> infer_file(path, lib_dirs, target)
+    Ok(#(path, lib_dirs, target)) -> {
+      io.println("Inferring " <> path)
+      infer_file(path, lib_dirs, target)
+    }
     Error(message) -> {
       io.println_error(message)
       usage()
@@ -708,6 +711,7 @@ fn list_nth(list: List(a), index: Int, default: a) -> a {
 }
 
 @external(erlang, "init", "get_plain_arguments")
+@external(javascript, "./gloat_cli_ffi.mjs", "get_start_arguments")
 fn get_start_arguments() -> List(Charlist)
 
 fn start_arguments() -> List(String) {
@@ -718,9 +722,11 @@ fn start_arguments() -> List(String) {
 pub type Charlist
 
 @external(erlang, "unicode", "characters_to_binary")
+@external(javascript, "./gloat_cli_ffi.mjs", "charlist_to_string")
 fn charlist_to_string(a: Charlist) -> String
 
 @external(erlang, "file", "read_file")
+@external(javascript, "./gloat_cli_ffi.mjs", "read_file")
 fn read_file(path: String) -> Result(BitArray, dynamic.Dynamic)
 
 fn read_file_text(path: String) -> Result(String, String) {
