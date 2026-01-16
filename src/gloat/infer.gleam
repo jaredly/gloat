@@ -426,9 +426,25 @@ fn infer_block(
     [g.Assignment(assign_span, kind, pat, annotation, value), ..rest] ->
       case kind {
         g.Let ->
-          infer_assignment(tenv, pat, annotation, value, rest, assign_span)
+          infer_assignment(
+            tenv,
+            kind,
+            pat,
+            annotation,
+            value,
+            rest,
+            assign_span,
+          )
         g.LetAssert(_message) ->
-          infer_assignment(tenv, pat, annotation, value, rest, assign_span)
+          infer_assignment(
+            tenv,
+            kind,
+            pat,
+            annotation,
+            value,
+            rest,
+            assign_span,
+          )
       }
 
     [g.Assert(span, expression, message), ..rest] -> {
@@ -547,6 +563,7 @@ fn infer_use_patterns(
 
 fn infer_assignment(
   tenv: env.TEnv,
+  kind: g.AssignmentKind,
   pat: g.Pattern,
   annotation: option.Option(g.Type),
   value: g.Expression,
@@ -581,7 +598,12 @@ fn infer_assignment(
       let #(type_, scope) = tuple
       use _ignored <- is.bind(unify(type_, value_type, span))
       use scope_applied <- is.bind(scope_apply_state(scope))
-      let bound_env = env.with_scope(tenv, scope_applied)
+      let refinements = case kind {
+        g.Let -> dict.new()
+        g.LetAssert(_message) -> pattern_alias_refinements(tenv, pat)
+      }
+      let bound_env =
+        env.with_refinements(env.with_scope(tenv, scope_applied), refinements)
       case is_empty {
         True -> type_apply_state(value_type)
         False -> infer_block(bound_env, rest, span)
@@ -999,6 +1021,17 @@ fn constructor_refinements(
         option.None -> refinements
       }
     }
+  }
+}
+
+fn pattern_alias_refinements(
+  tenv: env.TEnv,
+  pat: g.Pattern,
+) -> dict.Dict(String, String) {
+  case pattern_constructor_refinement(tenv, pat) {
+    option.Some(#(constructor_name, option.Some(alias_name))) ->
+      dict.from_list([#(alias_name, constructor_name)])
+    _ -> dict.new()
   }
 }
 
