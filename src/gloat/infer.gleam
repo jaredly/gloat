@@ -1896,14 +1896,20 @@ pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> is.InferState(Nil)
             let #(left, right) = args
             unify(left, right, span)
           })
-        False ->
-          is.error(
-            "Incompatible tuple arity: "
-              <> types.type_to_string(t1)
-              <> " vs "
-              <> types.type_to_string(t2),
-            span,
-          )
+        False -> {
+          use handled <- is.bind(tuple_prefix_unify(args1, args2, span))
+          case handled {
+            True -> is.ok(Nil)
+            False ->
+              is.error(
+                "Incompatible tuple arity: "
+                  <> types.type_to_string(t1)
+                  <> " vs "
+                  <> types.type_to_string(t2),
+                span,
+              )
+          }
+        }
       }
     _, _ ->
       is.error(
@@ -1943,6 +1949,50 @@ pub fn var_bind(
         }
       }
   }
+}
+
+fn tuple_prefix_unify(
+  args1: List(types.Type),
+  args2: List(types.Type),
+  span: g.Span,
+) -> is.InferState(Bool) {
+  let len1 = list.length(args1)
+  let len2 = list.length(args2)
+  case len1 < len2 && is_open_tuple(args1) {
+    True -> {
+      let pairs = list.zip(args1, list.take(args2, len1))
+      use _ignored <- is.bind(
+        is.each_list(pairs, fn(args) {
+          let #(left, right) = args
+          unify(left, right, span)
+        }),
+      )
+      is.ok(True)
+    }
+    False ->
+      case len2 < len1 && is_open_tuple(args2) {
+        True -> {
+          let pairs = list.zip(list.take(args1, len2), args2)
+          use _ignored <- is.bind(
+            is.each_list(pairs, fn(args) {
+              let #(left, right) = args
+              unify(left, right, span)
+            }),
+          )
+          is.ok(True)
+        }
+        False -> is.ok(False)
+      }
+  }
+}
+
+fn is_open_tuple(args: List(types.Type)) -> Bool {
+  list.all(args, fn(arg) {
+    case arg {
+      types.Tvar(name, _) -> string.starts_with(name, "tuple_item")
+      _ -> False
+    }
+  })
 }
 
 pub fn one_subst(var: String, type_: types.Type) -> types.Subst {

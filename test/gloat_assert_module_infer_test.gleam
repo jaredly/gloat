@@ -11,44 +11,66 @@ import gloat/scheme
 import gloat/type_error
 import gloat/types
 
+type TypeOrParseError {
+  Type(gloat.TypeError)
+  Parse(g.Error)
+}
+
+fn wrap_parse(res: Result(a, g.Error)) {
+  case res {
+    Ok(v) -> Ok(v)
+    Error(err) -> Error(Parse(err))
+  }
+}
+
+fn wrap_type(res: Result(a, gloat.TypeError)) {
+  case res {
+    Ok(v) -> Ok(v)
+    Error(err) -> Error(Type(err))
+  }
+}
+
 fn assert_module_infer(
   code: String,
-) -> Result(List(#(String, String)), gloat.TypeError) {
+) -> Result(List(#(String, String)), TypeOrParseError) {
   infer_module(code, [])
 }
 
 fn assert_module_infer_with_deps(
   deps: List(#(String, String)),
   code: String,
-) -> Result(List(#(String, String)), gloat.TypeError) {
+) -> Result(List(#(String, String)), TypeOrParseError) {
   infer_module(code, deps)
 }
 
 fn infer_module(
   code: String,
   deps: List(#(String, String)),
-) -> Result(List(#(String, String)), gloat.TypeError) {
+) -> Result(List(#(String, String)), TypeOrParseError) {
   let base_env = gloat.builtin_env()
-  result.try(add_deps(base_env, deps), fn(env_with_deps) {
-    let assert Ok(parsed) = g.module(code)
-    result.try(gloat.add_module(env_with_deps, parsed), fn(env2) {
-      let names = public_export_names(parsed)
-      result.map(
-        result.all(
-          list.map(names, fn(name) {
-            case env.resolve(env2, name) {
-              Ok(scheme_) -> Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
-              Error(_) ->
-                Error(type_error.new(
-                  "definition not found in env: " <> name,
-                  types.unknown_span,
-                ))
-            }
-          }),
-        ),
-        sort_pairs,
-      )
-    })
+  result.try(wrap_type(add_deps(base_env, deps)), fn(env_with_deps) {
+    use parsed <- result.try(wrap_parse(g.module(code)))
+    wrap_type(
+      result.try(gloat.add_module(env_with_deps, parsed), fn(env2) {
+        let names = public_export_names(parsed)
+        result.map(
+          result.all(
+            list.map(names, fn(name) {
+              case env.resolve(env2, name) {
+                Ok(scheme_) ->
+                  Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
+                Error(_) ->
+                  Error(type_error.new(
+                    "definition not found in env: " <> name,
+                    types.unknown_span,
+                  ))
+              }
+            }),
+          ),
+          sort_pairs,
+        )
+      }),
+    )
   })
 }
 
@@ -347,14 +369,14 @@ fn sort_pairs(items: List(#(String, String))) -> List(#(String, String)) {
 pub fn infer_module_test() {
   assert Ok(sort_pairs([#("repeat", "fn(Int, a) -> List(a)")]))
     == assert_module_infer(
-      "pub fn repeat(i, x) {\n           case i {\n             0 -> []\n             i -> [x .. repeat(i - 1, x)]\n           }\n         }",
+      "pub fn repeat(i, x) {\n           case i {\n             0 -> []\n             i -> [x, .. repeat(i - 1, x)]\n           }\n         }",
     )
 }
 
 pub fn infer_module_test1_test() {
   assert Ok(sort_pairs([#("length", "fn(List(a)) -> Int")]))
     == assert_module_infer(
-      "pub fn length(list) {\n           case list {\n           [] -> 0\n           [x .. xs] -> length(xs) + 1\n           }\n        }",
+      "pub fn length(list) {\n           case list {\n           [] -> 0\n           [x, .. xs] -> length(xs) + 1\n           }\n        }",
     )
 }
 
@@ -863,7 +885,15 @@ pub fn record_update_out_of_order_test() {
 }
 
 pub fn record_update_generic_test() {
-  assert Ok(sort_pairs([#("Box", "fn(a, b) -> Box(a, b)")]))
+  assert Ok(
+      sort_pairs([
+        #("Box", "fn(a, b) -> Box(a, b)"),
+        #(
+          "combine_boxes",
+          "fn(Box(Int, Bool), Box(Bool, Int)) -> Box(Int, Bool)",
+        ),
+      ]),
+    )
     == assert_module_infer(
       "\n        pub type Box(a, b) {\n            Box(left: a, right: b)\n        }\n\n        pub fn combine_boxes(a: Box(Int, Bool), b: Box(Bool, Int)) {\n            Box(..a, left: a.left + b.right, right: b.left)\n        }",
     )
