@@ -167,6 +167,7 @@ pub fn add_typealias(
     dict.new(),
     dict.new(),
     dict.new(),
+    dict.new(),
   )
 }
 
@@ -200,8 +201,16 @@ pub fn add_deftype(
       )
   }
 
-  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params, _type_names) =
-    tenv
+  let env.TEnv(
+    _values,
+    _tcons,
+    _types,
+    aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = tenv
 
   let parsed_constrs =
     list.map(constrs, fn(args) {
@@ -259,7 +268,16 @@ pub fn add_deftype(
       }),
     )
 
-  env.TEnv(values, tcons, types_map, dict.new(), dict.new(), params, dict.new())
+  env.TEnv(
+    values,
+    tcons,
+    types_map,
+    dict.new(),
+    dict.new(),
+    params,
+    dict.new(),
+    dict.new(),
+  )
 }
 
 pub fn add_module(
@@ -339,6 +357,7 @@ fn add_imports(
           _modules,
           _params,
           _tn,
+          _refinements,
         ) = tenv
         case
           dict.has_key(types_map, qualified) || dict.has_key(aliases, qualified)
@@ -367,6 +386,7 @@ fn add_imports(
                 _modules_t,
                 _params_t,
                 _type_names_t,
+                _refinements_t,
               ) = tenv
               let acc5 = case dict.get(tcons_src, qualified) {
                 Ok(constructor) -> {
@@ -378,6 +398,7 @@ fn add_imports(
                     modules_acc,
                     params_acc,
                     type_names_acc,
+                    refinements_acc,
                   ) = acc4
                   env.TEnv(
                     values_acc,
@@ -387,6 +408,7 @@ fn add_imports(
                     modules_acc,
                     params_acc,
                     type_names_acc,
+                    refinements_acc,
                   )
                 }
                 Error(_) -> acc4
@@ -1428,6 +1450,7 @@ pub fn builtin_env() -> env.TEnv {
       #("Map", #(2, set.new())),
       #("Set", #(1, set.new())),
     ]),
+    dict.new(),
     dict.new(),
     dict.new(),
     dict.new(),

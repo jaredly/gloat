@@ -101,6 +101,7 @@ pub fn pattern_to_ex_pattern(
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = tenv
       let constructor_name = case module {
         option.None -> Ok(name)
@@ -340,6 +341,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = tenv
       case dict.get(types, gid) {
         Error(_) -> []

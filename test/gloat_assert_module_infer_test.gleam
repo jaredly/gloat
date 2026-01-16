@@ -80,8 +80,16 @@ fn qualify_dep_env(
   let public_aliases = public_type_alias_names(module)
   let public_custom_types = public_custom_type_names(module)
 
-  let env.TEnv(_values, tcons, types_map, aliases, _modules, _params, _names) =
-    dep_env
+  let env.TEnv(
+    _values,
+    tcons,
+    types_map,
+    aliases,
+    _modules,
+    _params,
+    _names,
+    _refinements,
+  ) = dep_env
 
   let values_dict =
     list.fold(public_values, dict.new(), fn(acc, name) {
@@ -154,6 +162,7 @@ fn qualify_dep_env(
     alias_dict,
     dict.new(),
     params_dict,
+    dict.new(),
     dict.new(),
   )
 }

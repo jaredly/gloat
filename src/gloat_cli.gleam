@@ -245,6 +245,7 @@ fn module_exports_env(
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = module_env
       let tcons_filtered =
         filter_dict(tcons, constructor_names)
@@ -263,6 +264,7 @@ fn module_exports_env(
         aliases_filtered,
         dict.new(),
         params,
+        dict.new(),
         dict.new(),
       ))
     },
