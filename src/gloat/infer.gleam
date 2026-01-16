@@ -181,175 +181,150 @@ fn infer_expr_inner(
       use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
       use record_type <- is.bind(infer_expr_inner(tenv, record))
-      use _ignored <- is.bind(unify(record_type, cres, span))
-      use _ignored2 <- is.bind(
-        is.each_list(fields, fn(field) {
-          let g.RecordUpdateField(label, item) = field
-          use ctype <- is.bind(lookup_constructor_field(label, cfields, span))
-          let expr = case item {
-            option.Some(expr) -> expr
-            option.None -> g.Variable(span, label)
-          }
-          use expr_type <- is.bind(infer_expr_inner(tenv, expr))
-          unify(expr_type, ctype, span)
-        }),
-      )
-      type_apply_state(cres)
+      use applied_record <- is.bind(type_apply_state(record_type))
+      case applied_record {
+        types.Tvar(_, _) -> {
+          use _ignored <- is.bind(unify(record_type, cres, span))
+          type_apply_state(cres)
+        }
+        _ -> {
+          use record_tcon <- is.bind(
+            is.from_result(types.tcon_and_args(applied_record, [], span)),
+          )
+          let #(record_tname, record_targs) = record_tcon
+          use constructor_tcon <- is.bind(
+            is.from_result(types.tcon_and_args(cres, [], span)),
+          )
+          let #(constructor_tname, _constructor_targs) = constructor_tcon
+          use _ignored <- is.bind(case record_tname == constructor_tname {
+            True -> is.ok(Nil)
+            False -> is.error("Record update type mismatch", span)
+          })
+          let env.TEnv(
+            _values,
+            tcons,
+            _types,
+            _aliases,
+            _modules,
+            _params,
+            _type_names,
+            _refinements,
+          ) = tenv
+          use constructor_def <- is.bind(case dict.get(tcons, name) {
+            Ok(value) -> is.ok(value)
+            Error(_) -> is.error("Unknown constructor " <> name, span)
+          })
+          let #(free, raw_fields, _cres) = constructor_def
+          let record_subst = dict.from_list(list.zip(free, record_targs))
+          let record_fields =
+            list.map(raw_fields, fn(field) {
+              let #(label, t) = field
+              #(label, types.type_apply(record_subst, t))
+            })
+          let updated_labels =
+            list.map(fields, fn(field) {
+              let g.RecordUpdateField(label, _item) = field
+              label
+            })
+          use _ignored2 <- is.bind(
+            is.each_list(fields, fn(field) {
+              let g.RecordUpdateField(label, item) = field
+              use ctype <- is.bind(lookup_constructor_field(
+                label,
+                cfields,
+                span,
+              ))
+              let expr = case item {
+                option.Some(expr) -> expr
+                option.None -> g.Variable(span, label)
+              }
+              use expr_type <- is.bind(infer_expr_inner(tenv, expr))
+              unify(expr_type, ctype, span)
+            }),
+          )
+          use _ignored3 <- is.bind(
+            is.each_list(record_fields, fn(field) {
+              let #(maybe_label, record_type) = field
+              case maybe_label {
+                option.None -> is.ok(Nil)
+                option.Some(label) ->
+                  case list.contains(updated_labels, label) {
+                    True -> is.ok(Nil)
+                    False -> {
+                      use ctype <- is.bind(lookup_constructor_field(
+                        label,
+                        cfields,
+                        span,
+                      ))
+                      unify(record_type, ctype, span)
+                    }
+                  }
+              }
+            }),
+          )
+          type_apply_state(cres)
+        }
+      }
     }
 
     g.FieldAccess(span, container, label) -> {
       case container {
-        g.Variable(_span, module_name) ->
-          case env.resolve_module(tenv, module_name) {
-            Ok(module_key) ->
-              case env.resolve(tenv, module_key <> "/" <> label) {
-                Ok(scheme_) -> instantiate(scheme_, span)
-                Error(_) ->
-                  is.error(
-                    "Unknown module value " <> module_key <> "/" <> label,
+        g.Variable(_span, name) ->
+          case env.resolve_refinement(tenv, name) {
+            Ok(constructor_name) -> {
+              use target_type <- is.bind(infer_expr_inner(tenv, container))
+              use applied_target <- is.bind(type_apply_state(target_type))
+              case applied_target {
+                types.Tvar(_, _) ->
+                  is.error("Record field access requires known type", span)
+                _ ->
+                  field_type_for_constructor(
+                    tenv,
+                    constructor_name,
+                    applied_target,
+                    label,
                     span,
                   )
               }
+            }
             Error(_) ->
-              case env.resolve_refinement(tenv, module_name) {
-                Ok(constructor_name) -> {
-                  use target_type <- is.bind(infer_expr_inner(tenv, container))
-                  use applied_target <- is.bind(type_apply_state(target_type))
-                  case applied_target {
-                    types.Tvar(_, _) ->
-                      is.error("Record field access requires known type", span)
-                    _ ->
-                      field_type_for_constructor(
-                        tenv,
-                        constructor_name,
-                        applied_target,
-                        label,
-                        span,
-                      )
-                  }
-                }
-                Error(_) -> {
-                  use target_type <- is.bind(infer_expr_inner(tenv, container))
-                  use applied_target <- is.bind(type_apply_state(target_type))
-                  case applied_target {
-                    types.Tvar(_, _) ->
-                      is.error("Record field access requires known type", span)
-                    _ -> {
-                      use tcon <- is.bind(
-                        is.from_result(types.tcon_and_args(
-                          applied_target,
-                          [],
-                          span,
-                        )),
-                      )
-                      let #(tname, targs) = tcon
-                      let env.TEnv(
-                        _values,
-                        tcons,
-                        types_map,
-                        _aliases,
-                        _modules,
-                        _params,
-                        _type_names,
-                        _refinements,
-                      ) = tenv
-                      case dict.get(types_map, tname) {
+              case env.resolve(tenv, name) {
+                Ok(_) -> infer_record_field_access(tenv, span, container, label)
+                Error(_) ->
+                  case env.resolve_module(tenv, name) {
+                    Ok(module_key) ->
+                      case env.resolve(tenv, module_key <> "/" <> label) {
+                        Ok(scheme_) -> instantiate(scheme_, span)
                         Error(_) ->
-                          is.error("Unknown type name " <> tname, span)
-                        Ok(#(_arity, names)) -> {
-                          let constructors = set.to_list(names)
-                          case constructors {
-                            [cname] -> {
-                              case dict.get(tcons, cname) {
-                                Ok(value) -> {
-                                  let #(free, cfields, _cres) = value
-                                  let subst =
-                                    dict.from_list(list.zip(free, targs))
-                                  use ctype <- is.bind(lookup_constructor_field(
-                                    label,
-                                    cfields,
-                                    span,
-                                  ))
-                                  let field_type =
-                                    types.type_apply(subst, ctype)
-                                  is.ok(field_type)
-                                }
+                          case module_key == "gleam" {
+                            True ->
+                              case env.resolve(tenv, label) {
+                                Ok(scheme_) -> instantiate(scheme_, span)
                                 Error(_) ->
                                   is.error(
-                                    "Unknown constructor " <> cname,
+                                    "Unknown module value "
+                                      <> module_key
+                                      <> "/"
+                                      <> label,
                                     span,
                                   )
                               }
-                            }
-                            _ ->
+                            False ->
                               is.error(
-                                "Record field access requires single-constructor type "
-                                  <> tname,
+                                "Unknown module value "
+                                  <> module_key
+                                  <> "/"
+                                  <> label,
                                 span,
                               )
                           }
-                        }
                       }
-                    }
+                    Error(_) ->
+                      infer_record_field_access(tenv, span, container, label)
                   }
-                }
               }
           }
-        _ -> {
-          use target_type <- is.bind(infer_expr_inner(tenv, container))
-          use applied_target <- is.bind(type_apply_state(target_type))
-          case applied_target {
-            types.Tvar(_, _) ->
-              is.error("Record field access requires known type", span)
-            _ -> {
-              use tcon <- is.bind(
-                is.from_result(types.tcon_and_args(applied_target, [], span)),
-              )
-              let #(tname, targs) = tcon
-              let env.TEnv(
-                _values,
-                tcons,
-                types_map,
-                _aliases,
-                _modules,
-                _params,
-                _type_names,
-                _refinements,
-              ) = tenv
-              case dict.get(types_map, tname) {
-                Error(_) -> is.error("Unknown type name " <> tname, span)
-                Ok(#(_arity, names)) -> {
-                  let constructors = set.to_list(names)
-                  case constructors {
-                    [cname] -> {
-                      case dict.get(tcons, cname) {
-                        Ok(value) -> {
-                          let #(free, cfields, _cres) = value
-                          let subst = dict.from_list(list.zip(free, targs))
-                          use ctype <- is.bind(lookup_constructor_field(
-                            label,
-                            cfields,
-                            span,
-                          ))
-                          let field_type = types.type_apply(subst, ctype)
-                          is.ok(field_type)
-                        }
-                        Error(_) ->
-                          is.error("Unknown constructor " <> cname, span)
-                      }
-                    }
-                    _ ->
-                      is.error(
-                        "Record field access requires single-constructor type "
-                          <> tname,
-                        span,
-                      )
-                  }
-                }
-              }
-            }
-          }
-        }
+        _ -> infer_record_field_access(tenv, span, container, label)
       }
     }
 
@@ -424,28 +399,7 @@ fn infer_block(
     }
 
     [g.Assignment(assign_span, kind, pat, annotation, value), ..rest] ->
-      case kind {
-        g.Let ->
-          infer_assignment(
-            tenv,
-            kind,
-            pat,
-            annotation,
-            value,
-            rest,
-            assign_span,
-          )
-        g.LetAssert(_message) ->
-          infer_assignment(
-            tenv,
-            kind,
-            pat,
-            annotation,
-            value,
-            rest,
-            assign_span,
-          )
-      }
+      infer_assignment(tenv, kind, pat, annotation, value, rest, assign_span)
 
     [g.Assert(span, expression, message), ..rest] -> {
       use expr_type <- is.bind(infer_expr_inner(tenv, expression))
@@ -587,7 +541,12 @@ fn infer_assignment(
     g.PatternVariable(_span, name) -> {
       use applied_env <- is.bind(tenv_apply_state(tenv))
       let scheme_ = env.generalize(applied_env, value_type)
-      let bound_env = env.with_type(applied_env, name, scheme_)
+      let refinements = assignment_refinements(tenv, kind, pat, value)
+      let bound_env =
+        env.with_refinements(
+          env.with_type(applied_env, name, scheme_),
+          refinements,
+        )
       case is_empty {
         True -> type_apply_state(value_type)
         False -> infer_block(bound_env, rest, span)
@@ -598,10 +557,7 @@ fn infer_assignment(
       let #(type_, scope) = tuple
       use _ignored <- is.bind(unify(type_, value_type, span))
       use scope_applied <- is.bind(scope_apply_state(scope))
-      let refinements = case kind {
-        g.Let -> dict.new()
-        g.LetAssert(_message) -> pattern_alias_refinements(tenv, pat)
-      }
+      let refinements = assignment_refinements(tenv, kind, pat, value)
       let bound_env =
         env.with_refinements(env.with_scope(tenv, scope_applied), refinements)
       case is_empty {
@@ -628,11 +584,30 @@ fn infer_call(
   case has_labels, constructor_name(tenv, function) {
     True, option.Some(_) -> infer_constructor_call(tenv, span, function, args)
     _, _ -> {
-      let exprs =
-        list.map(args, fn(arg) {
-          let #(_label, expr) = arg
-          expr
-        })
+      let exprs = case has_labels {
+        True ->
+          case resolve_call_params(tenv, function) {
+            Ok(params) ->
+              case reorder_call_args(params, arguments) {
+                Ok(ordered) -> ordered
+                Error(_) ->
+                  list.map(args, fn(arg) {
+                    let #(_label, expr) = arg
+                    expr
+                  })
+              }
+            Error(_) ->
+              list.map(args, fn(arg) {
+                let #(_label, expr) = arg
+                expr
+              })
+          }
+        False ->
+          list.map(args, fn(arg) {
+            let #(_label, expr) = arg
+            expr
+          })
+      }
       use target_type <- is.bind(infer_expr_inner(tenv, function))
       use arg_types <- is.bind(
         is.map_list(exprs, fn(expr) {
@@ -643,6 +618,61 @@ fn infer_call(
       use target_type_applied <- is.bind(type_apply_state(target_type))
       apply_call_args(target_type_applied, arg_types, span)
     }
+  }
+}
+
+fn reorder_call_args(
+  params: List(option.Option(String)),
+  arguments: List(g.Field(g.Expression)),
+) -> Result(List(g.Expression), Nil) {
+  let labelled =
+    list.fold(arguments, dict.new(), fn(acc, field) {
+      let #(_label, expr) = field_expr(field)
+      case arg_label(field) {
+        option.Some(label) -> dict.insert(acc, label, expr)
+        option.None -> acc
+      }
+    })
+  let unlabelled =
+    list.fold(arguments, [], fn(acc, field) {
+      let #(_label, expr) = field_expr(field)
+      case arg_label(field) {
+        option.Some(_) -> acc
+        option.None -> [expr, ..acc]
+      }
+    })
+    |> list.reverse
+  reorder_call_args_inner(params, labelled, unlabelled, [])
+}
+
+fn reorder_call_args_inner(
+  params: List(option.Option(String)),
+  labelled: dict.Dict(String, g.Expression),
+  unlabelled: List(g.Expression),
+  acc: List(g.Expression),
+) -> Result(List(g.Expression), Nil) {
+  case params {
+    [] -> Ok(list.reverse(acc))
+    [param, ..rest] ->
+      case param {
+        option.Some(label) ->
+          case dict.get(labelled, label) {
+            Ok(expr) ->
+              reorder_call_args_inner(rest, labelled, unlabelled, [expr, ..acc])
+            Error(_) ->
+              case unlabelled {
+                [expr, ..tail] ->
+                  reorder_call_args_inner(rest, labelled, tail, [expr, ..acc])
+                [] -> Error(Nil)
+              }
+          }
+        option.None ->
+          case unlabelled {
+            [expr, ..tail] ->
+              reorder_call_args_inner(rest, labelled, tail, [expr, ..acc])
+            [] -> Error(Nil)
+          }
+      }
   }
 }
 
@@ -1024,14 +1054,42 @@ fn constructor_refinements(
   }
 }
 
-fn pattern_alias_refinements(
+fn assignment_refinements(
   tenv: env.TEnv,
+  kind: g.AssignmentKind,
   pat: g.Pattern,
+  value: g.Expression,
 ) -> dict.Dict(String, String) {
-  case pattern_constructor_refinement(tenv, pat) {
-    option.Some(#(constructor_name, option.Some(alias_name))) ->
-      dict.from_list([#(alias_name, constructor_name)])
-    _ -> dict.new()
+  case kind {
+    g.LetAssert(_message) ->
+      case pattern_constructor_refinement(tenv, pat) {
+        option.None -> dict.new()
+        option.Some(#(constructor_name, alias)) -> {
+          let refinements = case subject_refinement_name(value) {
+            option.Some(name) -> dict.from_list([#(name, constructor_name)])
+            option.None -> dict.new()
+          }
+          case alias {
+            option.Some(alias_name) ->
+              dict.insert(refinements, alias_name, constructor_name)
+            option.None -> refinements
+          }
+        }
+      }
+    g.Let ->
+      case pat {
+        g.PatternVariable(_span, name) ->
+          case value {
+            g.Call(_call_span, function, _arguments) ->
+              case constructor_name(tenv, function) {
+                option.Some(constructor_name) ->
+                  dict.from_list([#(name, constructor_name)])
+                option.None -> dict.new()
+              }
+            _ -> dict.new()
+          }
+        _ -> dict.new()
+      }
   }
 }
 
@@ -1948,6 +2006,92 @@ fn tuple_index_vars(count: Int, span: g.Span) -> is.InferState(List(types.Type))
   }
 }
 
+fn infer_record_field_access(
+  tenv: env.TEnv,
+  span: g.Span,
+  container: g.Expression,
+  label: String,
+) -> is.InferState(types.Type) {
+  use target_type <- is.bind(infer_expr_inner(tenv, container))
+  use applied_target <- is.bind(type_apply_state(target_type))
+  case applied_target {
+    types.Tvar(_, _) ->
+      case unique_constructor_for_label(tenv, label) {
+        Ok(constructor_name) -> {
+          use args2 <- is.bind(instantiate_tcon(tenv, constructor_name, span))
+          let #(cfields, cres) = args2
+          use _ignored <- is.bind(unify(applied_target, cres, span))
+          use ctype <- is.bind(lookup_constructor_field(label, cfields, span))
+          type_apply_state(ctype)
+        }
+        Error(_) -> is.error("Record field access requires known type", span)
+      }
+    _ -> field_type_for_record_access(tenv, applied_target, label, span)
+  }
+}
+
+fn field_type_for_record_access(
+  tenv: env.TEnv,
+  applied_target: types.Type,
+  label: String,
+  span: g.Span,
+) -> is.InferState(types.Type) {
+  use tcon <- is.bind(
+    is.from_result(types.tcon_and_args(applied_target, [], span)),
+  )
+  let #(tname, targs) = tcon
+  let env.TEnv(
+    _values,
+    tcons,
+    types_map,
+    _aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = tenv
+  case dict.get(types_map, tname) {
+    Error(_) -> is.error("Unknown type name " <> tname, span)
+    Ok(#(_arity, names)) -> {
+      let constructors = set.to_list(names)
+      case constructors {
+        [cname] ->
+          field_type_for_constructor(tenv, cname, applied_target, label, span)
+        _ ->
+          field_type_for_constructors(tcons, constructors, targs, label, span)
+      }
+    }
+  }
+}
+
+fn field_type_for_constructors(
+  tcons: dict.Dict(
+    String,
+    #(List(String), List(#(option.Option(String), types.Type)), types.Type),
+  ),
+  constructors: List(String),
+  targs: List(types.Type),
+  label: String,
+  span: g.Span,
+) -> is.InferState(types.Type) {
+  use field_type <- is.bind(new_type_var("record_field", span))
+  use _ignored <- is.bind(
+    is.each_list(constructors, fn(constructor_name) {
+      case dict.get(tcons, constructor_name) {
+        Ok(value) -> {
+          let #(free, cfields, _cres) = value
+          let subst = dict.from_list(list.zip(free, targs))
+          use ctype <- is.bind(lookup_constructor_field(label, cfields, span))
+          let ctor_field_type = types.type_apply(subst, ctype)
+          unify(field_type, ctor_field_type, span)
+        }
+        Error(_) -> is.error("Unknown constructor " <> constructor_name, span)
+      }
+    }),
+  )
+  type_apply_state(field_type)
+}
+
 fn field_type_for_constructor(
   tenv: env.TEnv,
   constructor_name: String,
@@ -1972,8 +2116,8 @@ fn field_type_for_constructor(
   case dict.get(types_map, tname) {
     Error(_) -> is.error("Unknown type name " <> tname, span)
     Ok(#(_arity, names)) ->
-      case set.contains(names, constructor_name) {
-        False ->
+      case constructor_name_for_type(names, constructor_name, tname) {
+        Error(_) ->
           is.error(
             "Constructor "
               <> constructor_name
@@ -1981,8 +2125,8 @@ fn field_type_for_constructor(
               <> tname,
             span,
           )
-        True ->
-          case dict.get(tcons, constructor_name) {
+        Ok(resolved_name) ->
+          case dict.get(tcons, resolved_name) {
             Ok(value) -> {
               let #(free, cfields, _cres) = value
               let subst = dict.from_list(list.zip(free, targs))
@@ -1993,10 +2137,83 @@ fn field_type_for_constructor(
               ))
               is.ok(types.type_apply(subst, ctype))
             }
-            Error(_) ->
-              is.error("Unknown constructor " <> constructor_name, span)
+            Error(_) -> is.error("Unknown constructor " <> resolved_name, span)
           }
       }
+  }
+}
+
+fn constructor_name_for_type(
+  names: set.Set(String),
+  constructor_name: String,
+  type_name: String,
+) -> Result(String, Nil) {
+  case set.contains(names, constructor_name) {
+    True -> Ok(constructor_name)
+    False ->
+      case type_module_prefix(type_name) {
+        option.None -> Error(Nil)
+        option.Some(prefix) -> {
+          let qualified = prefix <> "/" <> constructor_name
+          case set.contains(names, qualified) {
+            True -> Ok(qualified)
+            False -> Error(Nil)
+          }
+        }
+      }
+  }
+}
+
+fn unique_constructor_for_label(
+  tenv: env.TEnv,
+  label: String,
+) -> Result(String, Nil) {
+  let env.TEnv(
+    _values,
+    tcons,
+    _types,
+    _aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = tenv
+  let matches =
+    list.fold(dict.to_list(tcons), [], fn(acc, pair) {
+      let #(name, #(_free, cfields, _cres)) = pair
+      case field_has_label(cfields, label) {
+        True -> [name, ..acc]
+        False -> acc
+      }
+    })
+  case list.reverse(matches) {
+    [name] -> Ok(name)
+    _ -> Error(Nil)
+  }
+}
+
+fn field_has_label(
+  cfields: List(#(option.Option(String), types.Type)),
+  label: String,
+) -> Bool {
+  list.any(cfields, fn(field) {
+    let #(maybe, _t) = field
+    case maybe {
+      option.Some(name) -> name == label
+      option.None -> False
+    }
+  })
+}
+
+fn type_module_prefix(type_name: String) -> option.Option(String) {
+  let parts = string.split(type_name, "/")
+  case list.reverse(parts) {
+    [_last] -> option.None
+    [_, ..rest_rev] -> {
+      let rest = list.reverse(rest_rev)
+      option.Some(string.join(rest, "/"))
+    }
+    [] -> option.None
   }
 }
 

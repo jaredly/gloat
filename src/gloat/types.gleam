@@ -232,9 +232,9 @@ fn type_to_string_gleam_inner(type_: Type) -> String {
   case type_ {
     Tvar(name, _) -> name
     Tcon(name, _) ->
-      case name {
+      case strip_module_prefix(name) {
         "BitString" -> "BitArray"
-        _ -> name
+        stripped -> stripped
       }
     Ttuple(args, _) ->
       "#("
@@ -260,9 +260,17 @@ fn type_to_string_gleam_inner(type_: Type) -> String {
   }
 }
 
+fn strip_module_prefix(name: String) -> String {
+  let parts = string.split(name, "/")
+  case list.reverse(parts) {
+    [last, ..] -> last
+    [] -> name
+  }
+}
+
 fn type_to_string_gleam_target(type_: Type) -> String {
   case type_ {
-    Tcon(name, _) -> name
+    Tcon(name, _) -> strip_module_prefix(name)
     Tvar(name, _) -> name
     _ -> "(" <> type_to_string_gleam_inner(type_) <> ")"
   }
