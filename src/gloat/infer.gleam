@@ -989,9 +989,9 @@ fn constructor_refinements(
   case pattern_constructor_refinement(tenv, pat) {
     option.None -> dict.new()
     option.Some(#(constructor_name, alias)) -> {
-      let refinements = case subject {
-        g.Variable(_span, name) -> dict.from_list([#(name, constructor_name)])
-        _ -> dict.new()
+      let refinements = case subject_refinement_name(subject) {
+        option.Some(name) -> dict.from_list([#(name, constructor_name)])
+        option.None -> dict.new()
       }
       case alias {
         option.Some(alias_name) ->
@@ -999,6 +999,18 @@ fn constructor_refinements(
         option.None -> refinements
       }
     }
+  }
+}
+
+fn subject_refinement_name(subject: g.Expression) -> option.Option(String) {
+  case subject {
+    g.Variable(_span, name) -> option.Some(name)
+    g.Echo(_span, value, _message) ->
+      case value {
+        option.Some(inner) -> subject_refinement_name(inner)
+        option.None -> option.None
+      }
+    _ -> option.None
   }
 }
 
