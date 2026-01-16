@@ -565,6 +565,7 @@ fn infer_call(
   function: g.Expression,
   arguments: List(g.Field(g.Expression)),
 ) -> is.InferState(types.Type) {
+  use _ignored <- is.bind(new_type_var("call", span))
   let args = list.map(arguments, fn(field) { field_expr(field) })
   let has_labels =
     list.any(args, fn(arg) {
@@ -598,10 +599,23 @@ fn apply_call_args(
   span: g.Span,
 ) -> is.InferState(types.Type) {
   case arg_types {
-    [] -> is.ok(target_type)
+    [] -> {
+      use result_var <- is.bind(new_type_var("result", span))
+      use _ignored <- is.bind(unify(
+        target_type,
+        types.Tfn([], result_var, span),
+        span,
+      ))
+      type_apply_state(result_var)
+    }
     _ ->
       case target_type {
         types.Tfn(fn_args, fn_result, _fn_span) -> {
+          let result_name = case fn_result {
+            types.Tvar(name, _) -> base_var_name(name)
+            _ -> "result"
+          }
+          use result_var <- is.bind(new_type_var(result_name, span))
           let arg_count = list.length(arg_types)
           let fn_count = list.length(fn_args)
           case arg_count <= fn_count {
@@ -613,9 +627,10 @@ fn apply_call_args(
                   unify(fn_arg, call_arg, span)
                 }),
               )
+              use _ignored2 <- is.bind(unify(fn_result, result_var, span))
               case remaining {
-                [] -> type_apply_state(fn_result)
-                _ -> is.ok(types.Tfn(remaining, fn_result, span))
+                [] -> type_apply_state(result_var)
+                _ -> is.ok(types.Tfn(remaining, result_var, span))
               }
             }
             False -> {
@@ -626,7 +641,8 @@ fn apply_call_args(
                   unify(fn_arg, call_arg, span)
                 }),
               )
-              use result_applied <- is.bind(type_apply_state(fn_result))
+              use _ignored2 <- is.bind(unify(fn_result, result_var, span))
+              use result_applied <- is.bind(type_apply_state(result_var))
               apply_call_args(result_applied, rest_args, span)
             }
           }
@@ -651,6 +667,20 @@ fn split_list_at(items: List(a), count: Int) -> #(List(a), List(a)) {
     False, [first, ..rest] -> {
       let #(prefix, remaining) = split_list_at(rest, count - 1)
       #([first, ..prefix], remaining)
+    }
+  }
+}
+
+fn base_var_name(name: String) -> String {
+  let parts = string.split(name, ":")
+  case parts {
+    [] -> name
+    [_] -> name
+    _ -> {
+      let trimmed = list.reverse(parts)
+      let trimmed = list.drop(trimmed, 1)
+      let trimmed = list.reverse(trimmed)
+      string.join(trimmed, with: ":")
     }
   }
 }
