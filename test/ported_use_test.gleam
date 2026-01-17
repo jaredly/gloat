@@ -23,16 +23,11 @@ pub fn arity_3_test() {
 
 pub fn call_is_variable_test() {
   assert Ok("Int")
-    == helpers.assert_infer(
-      "\nlet call = fn(f) { f() }\nuse <- call\n123\n",
-    )
+    == helpers.assert_infer("\nlet call = fn(f) { f() }\nuse <- call\n123\n")
 }
 
 pub fn call_is_literal_test() {
-  assert Ok("Float")
-    == helpers.assert_infer(
-      "\nuse <- fn(f) { f() }\n123.0\n",
-    )
+  assert Ok("Float") == helpers.assert_infer("\nuse <- fn(f) { f() }\n123.0\n")
 }
 
 pub fn call_is_capture_test() {
@@ -44,9 +39,7 @@ pub fn call_is_capture_test() {
 
 pub fn discard_test() {
   assert Ok("Nil")
-    == helpers.assert_infer(
-      "\nlet x = fn(f) { f(123) }\nuse _ <- x()\nNil\n",
-    )
+    == helpers.assert_infer("\nlet x = fn(f) { f(123) }\nuse _ <- x()\nNil\n")
 }
 
 pub fn discard_named_test() {

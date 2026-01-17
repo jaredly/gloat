@@ -3,10 +3,10 @@ import ported_helpers as helpers
 pub fn nested_record_access_test() {
   assert Ok(
       helpers.sort_pairs([
-        #( "A", "fn(B) -> A"),
-        #( "B", "fn(C) -> B"),
-        #( "C", "fn(Bool) -> C"),
-        #( "a", "fn(A) -> Int"),
+        #("A", "fn(B) -> A"),
+        #("B", "fn(C) -> B"),
+        #("C", "fn(Bool) -> C"),
+        #("a", "fn(A) -> Int"),
       ]),
     )
     == helpers.assert_module_infer(

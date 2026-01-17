@@ -2,9 +2,7 @@ import ported_helpers as helpers
 
 pub fn echo_has_same_type_as_printed_expression_test() {
   assert Ok(helpers.sort_pairs([#("main", "fn() -> Int")]))
-    == helpers.assert_module_infer(
-      "\npub fn main() {\n  echo 1\n}\n",
-    )
+    == helpers.assert_module_infer("\npub fn main() {\n  echo 1\n}\n")
 }
 
 pub fn echo_has_same_type_as_printed_expression_2_test() {
