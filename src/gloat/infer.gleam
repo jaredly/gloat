@@ -1373,6 +1373,12 @@ fn pipe_to_call(
   case right {
     g.Echo(echo_span, option.None, message) ->
       g.Echo(echo_span, option.Some(left), message)
+    g.FnCapture(call_span, option.None, function, args_before, args_after) -> {
+      let piped = g.UnlabelledField(left)
+      let before = list.append(args_before, [piped])
+      let piped_args = list.append(before, args_after)
+      g.Call(call_span, function, piped_args)
+    }
     g.Call(call_span, function, arguments) -> {
       let piped = g.UnlabelledField(left)
       let has_labels =
@@ -1383,7 +1389,15 @@ fn pipe_to_call(
             Ok(piped_args) -> piped_args
             Error(_) -> list.append(arguments, [piped])
           }
-        False -> list.append(arguments, [piped])
+        False ->
+          case resolve_call_params(tenv, function) {
+            Ok(params) ->
+              case list.length(arguments) < list.length(params) {
+                True -> [piped, ..arguments]
+                False -> list.append(arguments, [piped])
+              }
+            Error(_) -> list.append(arguments, [piped])
+          }
       }
       g.Call(call_span, function, piped_args)
     }
