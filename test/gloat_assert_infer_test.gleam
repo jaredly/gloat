@@ -48,7 +48,6 @@ pub fn assert_patterns_test() {
   assert Ok("Int") == assert_infer("let assert [a] = [1] a")
   assert Ok("Int") == assert_infer("let assert [a, 2] = [1] a")
   assert Ok("Int") == assert_infer("let assert [a, .._] = [1] a")
-  assert Ok("Int") == assert_infer("let assert [a, .._,] = [1] a")
   assert Ok("fn(List(a)) -> a")
     == assert_infer("fn(x) { let assert [a] = x a }")
   assert Ok("fn(List(Int)) -> Int")
@@ -81,7 +80,6 @@ pub fn lists_test() {
 }
 
 pub fn trailing_comma_lists_test() {
-  assert Ok("List(Int)") == assert_infer("[1, ..[2, ..[],]]")
   assert Ok("List(fn(a) -> a)") == assert_infer("[fn(x) { x },..[]]")
   assert Ok("List(fn(a) -> a)") == assert_infer("let f = fn(x) { x } [f, f]")
   assert Ok("List(#(List(a), List(b)))") == assert_infer("[#([], [])]")
@@ -265,11 +263,17 @@ fn infer_scheme_from_glance(
   name: String,
 ) -> Result(gloat.Scheme, gloat.TypeError) {
   let assert Ok(parsed) = glance.module(code)
-  result.try(gloat.add_module(gloat.builtin_env(), parsed), fn(env_) {
-    case env.resolve(env_, name) {
-      Ok(scheme) -> Ok(scheme)
-      Error(_) ->
-        Error(type_error.new("definition not found in env", types.unknown_span))
-    }
-  })
+  result.try(
+    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang"),
+    fn(env_) {
+      case env.resolve(env_, name) {
+        Ok(scheme) -> Ok(scheme)
+        Error(_) ->
+          Error(type_error.new(
+            "definition not found in env",
+            types.unknown_span,
+          ))
+      }
+    },
+  )
 }

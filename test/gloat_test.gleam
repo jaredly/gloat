@@ -120,6 +120,18 @@ pub fn use_statement_test() {
   assert Ok("Int") == process(code, "top")
 }
 
+pub fn pipe_underscore_test() {
+  let code =
+    "fn twople(x, y) -> #(Int, String) { #(x, y) }\nconst top = { 5 |> twople(\"Yes\") }"
+  assert Ok("(, Int String)") == process(code, "top")
+}
+
+pub fn pipe_underscore2_test() {
+  let code =
+    "fn twople(x, y) -> #(Int, String) { #(x, y) }\nconst top = { \"Yes\" |> twople(2, _) }"
+  assert Ok("(, Int String)") == process(code, "top")
+}
+
 pub fn use_statement_multiple_patterns_test() {
   let code =
     "fn with2(x, y, f) { f(x, y) }\nconst top = { use a, b <- with2(1, 2)\n a + b }"
@@ -294,11 +306,17 @@ fn infer_scheme_from_glance(
   name: String,
 ) -> Result(gloat.Scheme, gloat.TypeError) {
   let assert Ok(parsed) = glance.module(code)
-  result.try(gloat.add_module(gloat.builtin_env(), parsed), fn(env_) {
-    case env.resolve(env_, name) {
-      Ok(scheme) -> Ok(scheme)
-      Error(_) ->
-        Error(type_error.new("definition not found in env", types.unknown_span))
-    }
-  })
+  result.try(
+    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang"),
+    fn(env_) {
+      case env.resolve(env_, name) {
+        Ok(scheme) -> Ok(scheme)
+        Error(_) ->
+          Error(type_error.new(
+            "definition not found in env",
+            types.unknown_span,
+          ))
+      }
+    },
+  )
 }
