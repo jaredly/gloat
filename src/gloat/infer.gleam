@@ -470,6 +470,11 @@ fn infer_use_function(
   case function {
     g.Call(_call_span, target, arguments) -> {
       let args = list.map(arguments, fn(field) { field_expr(field) })
+      let has_labels =
+        list.any(args, fn(arg) {
+          let #(label, _expr) = arg
+          label != option.None
+        })
       let exprs =
         list.map(args, fn(arg) {
           let #(_label, expr) = arg
@@ -482,10 +487,29 @@ fn infer_use_function(
           infer_expr_inner(arg_tenv, expr)
         }),
       )
+      let ordered_arg_types = case has_labels {
+        True ->
+          case resolve_call_params(tenv, target) {
+            Ok(params) ->
+              case
+                reorder_use_call_args(
+                  params,
+                  arguments,
+                  arg_types,
+                  callback_type,
+                )
+              {
+                Ok(ordered) -> ordered
+                Error(_) -> list.append(arg_types, [callback_type])
+              }
+            Error(_) -> list.append(arg_types, [callback_type])
+          }
+        False -> list.append(arg_types, [callback_type])
+      }
       use target_type_applied <- is.bind(type_apply_state(target_type))
       unify(
         target_type_applied,
-        types.Tfn(list.append(arg_types, [callback_type]), result_var, span),
+        types.Tfn(ordered_arg_types, result_var, span),
         call_span,
       )
     }
@@ -684,6 +708,109 @@ fn reorder_call_args_inner(
             [expr, ..tail] ->
               reorder_call_args_inner(rest, labelled, tail, [expr, ..acc])
             [] -> Error(Nil)
+          }
+      }
+  }
+}
+
+fn reorder_use_call_args(
+  params: List(option.Option(String)),
+  arguments: List(g.Field(g.Expression)),
+  arg_types: List(types.Type),
+  callback_type: types.Type,
+) -> Result(List(types.Type), Nil) {
+  let labelled =
+    list.fold(list.zip(arguments, arg_types), dict.new(), fn(acc, pair) {
+      let #(field, arg_type) = pair
+      case arg_label(field) {
+        option.Some(label) -> dict.insert(acc, label, arg_type)
+        option.None -> acc
+      }
+    })
+  let unlabelled =
+    list.fold(list.zip(arguments, arg_types), [], fn(acc, pair) {
+      let #(field, arg_type) = pair
+      case arg_label(field) {
+        option.Some(_) -> acc
+        option.None -> [arg_type, ..acc]
+      }
+    })
+    |> list.reverse
+  reorder_use_call_args_inner(
+    params,
+    labelled,
+    unlabelled,
+    callback_type,
+    False,
+    [],
+  )
+}
+
+fn reorder_use_call_args_inner(
+  params: List(option.Option(String)),
+  labelled: dict.Dict(String, types.Type),
+  unlabelled: List(types.Type),
+  callback_type: types.Type,
+  used_callback: Bool,
+  acc: List(types.Type),
+) -> Result(List(types.Type), Nil) {
+  case params {
+    [] ->
+      case list.is_empty(unlabelled) && dict.size(labelled) == 0 {
+        True -> Ok(list.reverse(acc))
+        False -> Error(Nil)
+      }
+    [param, ..rest] ->
+      case param {
+        option.Some(label) ->
+          case dict.get(labelled, label) {
+            Ok(arg_type) ->
+              reorder_use_call_args_inner(
+                rest,
+                dict.delete(labelled, label),
+                unlabelled,
+                callback_type,
+                used_callback,
+                [arg_type, ..acc],
+              )
+            Error(_) ->
+              case used_callback {
+                True -> Error(Nil)
+                False ->
+                  reorder_use_call_args_inner(
+                    rest,
+                    labelled,
+                    unlabelled,
+                    callback_type,
+                    True,
+                    [callback_type, ..acc],
+                  )
+              }
+          }
+        option.None ->
+          case unlabelled {
+            [arg_type, ..tail] ->
+              reorder_use_call_args_inner(
+                rest,
+                labelled,
+                tail,
+                callback_type,
+                used_callback,
+                [arg_type, ..acc],
+              )
+            [] ->
+              case used_callback {
+                True -> Error(Nil)
+                False ->
+                  reorder_use_call_args_inner(
+                    rest,
+                    labelled,
+                    unlabelled,
+                    callback_type,
+                    True,
+                    [callback_type, ..acc],
+                  )
+              }
           }
       }
   }
@@ -1244,19 +1371,19 @@ fn pipe_to_call(
   right: g.Expression,
 ) -> g.Expression {
   case right {
+    g.Echo(echo_span, option.None, message) ->
+      g.Echo(echo_span, option.Some(left), message)
     g.Call(call_span, function, arguments) -> {
       let piped = g.UnlabelledField(left)
-      let piped_args = case split_at_unlabelled(arguments, []) {
-        Ok(#(prefix, rest)) -> list.append(prefix, [piped, ..rest])
-        Error(_) ->
+      let has_labels =
+        list.any(arguments, fn(arg) { arg_label(arg) != option.None })
+      let piped_args = case has_labels {
+        True ->
           case insert_piped_by_labels(tenv, function, arguments, piped) {
             Ok(piped_args) -> piped_args
-            Error(_) ->
-              case arguments {
-                [] -> [piped]
-                [first, ..rest] -> [first, piped, ..rest]
-              }
+            Error(_) -> list.append(arguments, [piped])
           }
+        False -> list.append(arguments, [piped])
       }
       g.Call(call_span, function, piped_args)
     }
@@ -1379,20 +1506,6 @@ fn arg_label(field: g.Field(g.Expression)) -> option.Option(String) {
     g.LabelledField(label, _loc, _item) -> option.Some(label)
     g.ShorthandField(label, _loc) -> option.Some(label)
     g.UnlabelledField(_) -> option.None
-  }
-}
-
-fn split_at_unlabelled(
-  arguments: List(g.Field(g.Expression)),
-  acc: List(g.Field(g.Expression)),
-) -> Result(#(List(g.Field(g.Expression)), List(g.Field(g.Expression))), Nil) {
-  case arguments {
-    [] -> Error(Nil)
-    [first, ..rest] ->
-      case first {
-        g.UnlabelledField(_) -> Ok(#(list.reverse(acc), [first, ..rest]))
-        _ -> split_at_unlabelled(rest, [first, ..acc])
-      }
   }
 }
 
@@ -1893,14 +2006,34 @@ pub fn unify(t1: types.Type, t2: types.Type, span: g.Span) -> is.InferState(Nil)
           let right = types.type_apply(subst, res2)
           unify(left, right, span)
         }
-        False ->
-          is.error(
-            "Incompatible function arity: "
-              <> types.type_to_string(t1)
-              <> " vs "
-              <> types.type_to_string(t2),
-            span,
-          )
+        False -> {
+          let len1 = list.length(args1)
+          let len2 = list.length(args2)
+          case len1 > len2 {
+            True -> {
+              let #(prefix, rest) = split_list_at(args1, len2)
+              use _ignored <- is.bind(
+                is.each_list(list.zip(prefix, args2), fn(args) {
+                  let #(left, right) = args
+                  unify(left, right, span)
+                }),
+              )
+              let curried = types.Tfn(rest, res1, span)
+              unify(res2, curried, span)
+            }
+            False -> {
+              let #(prefix, rest) = split_list_at(args2, len1)
+              use _ignored <- is.bind(
+                is.each_list(list.zip(args1, prefix), fn(args) {
+                  let #(left, right) = args
+                  unify(left, right, span)
+                }),
+              )
+              let curried = types.Tfn(rest, res2, span)
+              unify(res1, curried, span)
+            }
+          }
+        }
       }
     types.Ttuple(args1, _), types.Ttuple(args2, _) ->
       case list.length(args1) == list.length(args2) {
@@ -1971,7 +2104,7 @@ fn tuple_prefix_unify(
 ) -> is.InferState(Bool) {
   let len1 = list.length(args1)
   let len2 = list.length(args2)
-  case len1 < len2 && is_open_tuple(args1) {
+  case len1 < len2 {
     True -> {
       let pairs = list.zip(args1, list.take(args2, len1))
       use _ignored <- is.bind(
@@ -1983,7 +2116,7 @@ fn tuple_prefix_unify(
       is.ok(True)
     }
     False ->
-      case len2 < len1 && is_open_tuple(args2) {
+      case len2 < len1 {
         True -> {
           let pairs = list.zip(list.take(args1, len2), args2)
           use _ignored <- is.bind(
@@ -1997,15 +2130,6 @@ fn tuple_prefix_unify(
         False -> is.ok(False)
       }
   }
-}
-
-fn is_open_tuple(args: List(types.Type)) -> Bool {
-  list.all(args, fn(arg) {
-    case arg {
-      types.Tvar(name, _) -> string.starts_with(name, "tuple_item")
-      _ -> False
-    }
-  })
 }
 
 pub fn one_subst(var: String, type_: types.Type) -> types.Subst {

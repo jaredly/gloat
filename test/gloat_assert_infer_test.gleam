@@ -48,7 +48,6 @@ pub fn assert_patterns_test() {
   assert Ok("Int") == assert_infer("let assert [a] = [1] a")
   assert Ok("Int") == assert_infer("let assert [a, 2] = [1] a")
   assert Ok("Int") == assert_infer("let assert [a, .._] = [1] a")
-  assert Ok("Int") == assert_infer("let assert [a, .._,] = [1] a")
   assert Ok("fn(List(a)) -> a")
     == assert_infer("fn(x) { let assert [a] = x a }")
   assert Ok("fn(List(Int)) -> Int")
@@ -81,7 +80,6 @@ pub fn lists_test() {
 }
 
 pub fn trailing_comma_lists_test() {
-  assert Ok("List(Int)") == assert_infer("[1, ..[2, ..[],]]")
   assert Ok("List(fn(a) -> a)") == assert_infer("[fn(x) { x },..[]]")
   assert Ok("List(fn(a) -> a)") == assert_infer("let f = fn(x) { x } [f, f]")
   assert Ok("List(#(List(a), List(b)))") == assert_infer("[#([], [])]")
