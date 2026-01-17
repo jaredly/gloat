@@ -10,9 +10,11 @@ gleam add gloat@1
 ```
 ```gleam
 import gloat
+import io
 
 pub fn main() -> Nil {
-  // TODO: An example of the project in use
+  let assert Ok(type_) = gloat.infer_expr(gloat.builtin_env(), "2 + 2")
+  io.println(gloat.type_to_string(type_))
 }
 ```
 
@@ -24,3 +26,7 @@ Further documentation can be found at <https://hexdocs.pm/gloat>.
 gleam run   # Run the project
 gleam test  # Run the tests
 ```
+
+## Status
+
+- [x] gleam stdlib type checks
