@@ -14,10 +14,10 @@ import glance
 import io
 
 pub fn main() -> Nil {
-    # STOPSHIP this is wrong actually
-    let assert Ok(expr) = glance.expression("2 + 2")
-    let assert Ok(type_) = gloat.infer_expr(gloat.builtin_env(),expr)
-    io.println(gloat.type_to_string(type_))
+    let assert Ok(module) = glance.module("fn four() { 2 + 2 }")
+    let assert Ok(tenv) = gloat.add_module(gloat.builtin_env(), module)
+    let assert Some(scheme_) = gloat.resolve(tenv, "four")
+    io.println(gloat.scheme_to_string(scheme_))
 }
 ```
 
