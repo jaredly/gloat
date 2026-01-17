@@ -26,6 +26,53 @@ pub fn module_to_tops(module: g.Module) -> Result(List(ast.Top), Error) {
   result.all(results)
 }
 
+pub fn filter_module_for_target(module: g.Module, target: String) -> g.Module {
+  let g.Module(imports, custom_types, type_aliases, constants, functions) =
+    module
+  g.Module(
+    list.filter(imports, fn(defn) { definition_matches_target(defn, target) }),
+    list.filter(custom_types, fn(defn) {
+      definition_matches_target(defn, target)
+    }),
+    list.filter(type_aliases, fn(defn) {
+      definition_matches_target(defn, target)
+    }),
+    list.filter(constants, fn(defn) { definition_matches_target(defn, target) }),
+    list.filter(functions, fn(defn) { definition_matches_target(defn, target) }),
+  )
+}
+
+fn definition_matches_target(defn: g.Definition(a), target: String) -> Bool {
+  let g.Definition(attributes, _definition) = defn
+  case target_from_attrs(attributes) {
+    option.None -> True
+    option.Some(target_name) -> target_name == target
+  }
+}
+
+fn target_from_attrs(attrs: List(g.Attribute)) -> option.Option(String) {
+  list.fold(attrs, option.None, fn(acc, attr) {
+    case acc {
+      option.Some(_) -> acc
+      option.None -> {
+        let g.Attribute(name, arguments) = attr
+        case name {
+          "target" -> target_from_args(arguments)
+          _ -> option.None
+        }
+      }
+    }
+  })
+}
+
+fn target_from_args(args: List(g.Expression)) -> option.Option(String) {
+  case args {
+    [g.Variable(_, name)] -> option.Some(name)
+    [g.String(_, name)] -> option.Some(name)
+    _ -> option.None
+  }
+}
+
 pub fn expression(expr: g.Expression) -> Result(ast.Expr, Error) {
   case expr {
     g.Int(span, value) ->

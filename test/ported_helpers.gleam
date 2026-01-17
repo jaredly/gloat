@@ -50,13 +50,19 @@ fn infer_scheme_from_glance(
   name: String,
 ) -> Result(gloat.Scheme, gloat.TypeError) {
   let assert Ok(parsed) = g.module(code)
-  result.try(gloat.add_module(gloat.builtin_env(), parsed), fn(env_) {
-    case env.resolve(env_, name) {
-      Ok(scheme_) -> Ok(scheme_)
-      Error(_) ->
-        Error(type_error.new("definition not found in env", types.unknown_span))
-    }
-  })
+  result.try(
+    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang"),
+    fn(env_) {
+      case env.resolve(env_, name) {
+        Ok(scheme_) -> Ok(scheme_)
+        Error(_) ->
+          Error(type_error.new(
+            "definition not found in env",
+            types.unknown_span,
+          ))
+      }
+    },
+  )
 }
 
 fn wrap_parse(res: Result(a, g.Error)) -> Result(a, TypeOrParseError) {
@@ -81,25 +87,28 @@ fn infer_module(
   result.try(wrap_type(add_deps(base_env, deps)), fn(env_with_deps) {
     use parsed <- result.try(wrap_parse(g.module(code)))
     wrap_type(
-      result.try(gloat.add_module(env_with_deps, parsed), fn(env2) {
-        let names = public_export_names(parsed)
-        result.map(
-          result.all(
-            list.map(names, fn(name) {
-              case env.resolve(env2, name) {
-                Ok(scheme_) ->
-                  Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
-                Error(_) ->
-                  Error(type_error.new(
-                    "definition not found in env: " <> name,
-                    types.unknown_span,
-                  ))
-              }
-            }),
-          ),
-          sort_pairs,
-        )
-      }),
+      result.try(
+        gloat.add_module_with_target(env_with_deps, parsed, "erlang"),
+        fn(env2) {
+          let names = public_export_names(parsed)
+          result.map(
+            result.all(
+              list.map(names, fn(name) {
+                case env.resolve(env2, name) {
+                  Ok(scheme_) ->
+                    Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
+                  Error(_) ->
+                    Error(type_error.new(
+                      "definition not found in env: " <> name,
+                      types.unknown_span,
+                    ))
+                }
+              }),
+            ),
+            sort_pairs,
+          )
+        },
+      ),
     )
   })
 }
@@ -112,10 +121,13 @@ fn add_deps(
     result.try(acc, fn(env_acc) {
       let #(module_name, src) = dep
       let assert Ok(parsed) = g.module(src)
-      result.try(gloat.add_module(env_acc, parsed), fn(dep_env) {
-        let qualified = qualify_dep_env(dep_env, parsed, module_name)
-        Ok(env.merge(env_acc, qualified))
-      })
+      result.try(
+        gloat.add_module_with_target(env_acc, parsed, "erlang"),
+        fn(dep_env) {
+          let qualified = qualify_dep_env(dep_env, parsed, module_name)
+          Ok(env.merge(env_acc, qualified))
+        },
+      )
     })
   })
 }

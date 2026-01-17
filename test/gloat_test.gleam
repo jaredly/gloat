@@ -294,11 +294,17 @@ fn infer_scheme_from_glance(
   name: String,
 ) -> Result(gloat.Scheme, gloat.TypeError) {
   let assert Ok(parsed) = glance.module(code)
-  result.try(gloat.add_module(gloat.builtin_env(), parsed), fn(env_) {
-    case env.resolve(env_, name) {
-      Ok(scheme) -> Ok(scheme)
-      Error(_) ->
-        Error(type_error.new("definition not found in env", types.unknown_span))
-    }
-  })
+  result.try(
+    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang"),
+    fn(env_) {
+      case env.resolve(env_, name) {
+        Ok(scheme) -> Ok(scheme)
+        Error(_) ->
+          Error(type_error.new(
+            "definition not found in env",
+            types.unknown_span,
+          ))
+      }
+    },
+  )
 }

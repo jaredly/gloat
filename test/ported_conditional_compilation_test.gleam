@@ -29,13 +29,7 @@ pub fn generalising_test() {
 }
 
 pub fn excluded_generalising_test() {
-  assert Ok(
-      helpers.sort_pairs([
-        #("id", "fn(a) -> a"),
-        #("x", "fn() -> Int"),
-        #("y", "Int"),
-      ]),
-    )
+  assert Ok(helpers.sort_pairs([#("y", "Int")]))
     == helpers.assert_module_infer(
       "\n@target(javascript)\npub fn id(x) { x }\n\n@target(javascript)\npub fn x() { id(1) }\n\npub const y = 1\n",
     )
