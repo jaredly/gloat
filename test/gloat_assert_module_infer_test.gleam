@@ -7,6 +7,7 @@ import gleam/set
 import gleam/string
 import gloat
 import gloat/env
+import gloat/glance as gloat_glance
 import gloat/scheme
 import gloat/type_error
 import gloat/types
@@ -50,11 +51,12 @@ fn infer_module(
   let base_env = gloat.builtin_env()
   result.try(wrap_type(add_deps(base_env, deps)), fn(env_with_deps) {
     use parsed <- result.try(wrap_parse(g.module(code)))
+    let filtered = gloat_glance.filter_module_for_target(parsed, "erlang")
     wrap_type(
       result.try(
-        gloat.add_module_with_target(env_with_deps, parsed, "erlang"),
+        gloat.add_module_with_target(env_with_deps, filtered, "erlang"),
         fn(env2) {
-          let names = public_export_names(parsed)
+          let names = public_export_names(filtered)
           result.map(
             result.all(
               list.map(names, fn(name) {
@@ -85,10 +87,11 @@ fn add_deps(
     result.try(acc, fn(env_acc) {
       let #(module_name, src) = dep
       let assert Ok(parsed) = g.module(src)
+      let filtered = gloat_glance.filter_module_for_target(parsed, "erlang")
       result.try(
-        gloat.add_module_with_target(env_acc, parsed, "erlang"),
+        gloat.add_module_with_target(env_acc, filtered, "erlang"),
         fn(dep_env) {
-          let qualified = qualify_dep_env(dep_env, parsed, module_name)
+          let qualified = qualify_dep_env(dep_env, filtered, module_name)
           Ok(env.merge(env_acc, qualified))
         },
       )
