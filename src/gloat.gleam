@@ -50,6 +50,14 @@ pub fn type_to_string(type_: types.Type) -> String {
   types.type_to_string(type_)
 }
 
+pub fn type_to_string_gleam(type_: types.Type) -> String {
+  types.type_to_string_gleam(type_)
+}
+
 pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string(scheme_)
+}
+
+pub fn scheme_to_string_gleam(scheme_: scheme.Scheme) -> String {
+  scheme.scheme_to_string_gleam(scheme_)
 }

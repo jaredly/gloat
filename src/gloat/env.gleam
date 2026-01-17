@@ -17,6 +17,7 @@ pub type TEnv {
     modules: dict.Dict(String, String),
     params: dict.Dict(String, List(option.Option(String))),
     type_names: dict.Dict(String, String),
+    refinements: dict.Dict(String, String),
   )
 }
 
@@ -29,12 +30,13 @@ pub fn empty() -> TEnv {
     dict.new(),
     dict.new(),
     dict.new(),
+    dict.new(),
   )
 }
 
 pub fn merge(one: TEnv, two: TEnv) -> TEnv {
-  let TEnv(v1, c1, t1, a1, m1, p1, n1) = one
-  let TEnv(v2, c2, t2, a2, m2, p2, n2) = two
+  let TEnv(v1, c1, t1, a1, m1, p1, n1, r1) = one
+  let TEnv(v2, c2, t2, a2, m2, p2, n2, r2) = two
   TEnv(
     dict.merge(v1, v2),
     dict.merge(c1, c2),
@@ -43,11 +45,21 @@ pub fn merge(one: TEnv, two: TEnv) -> TEnv {
     dict.merge(m1, m2),
     dict.merge(p1, p2),
     dict.merge(n1, n2),
+    dict.merge(r1, r2),
   )
 }
 
 pub fn with_type(env: TEnv, name: String, scheme_: scheme.Scheme) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
   TEnv(
     dict.insert(values, name, scheme_),
     tcons,
@@ -56,6 +68,7 @@ pub fn with_type(env: TEnv, name: String, scheme_: scheme.Scheme) -> TEnv {
     modules,
     params,
     type_names,
+    refinements,
   )
 }
 
@@ -64,7 +77,16 @@ pub fn with_type_params(
   name: String,
   params_: List(option.Option(String)),
 ) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
   TEnv(
     values,
     tcons,
@@ -73,11 +95,26 @@ pub fn with_type_params(
     modules,
     dict.insert(params, name, params_),
     type_names,
+    refinements,
   )
 }
 
 pub fn with_scope(env: TEnv, scope: dict.Dict(String, scheme.Scheme)) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
+  let refinements_pruned =
+    list.fold(dict.to_list(scope), refinements, fn(acc, pair) {
+      let #(name, _scheme) = pair
+      dict.delete(acc, name)
+    })
   TEnv(
     dict.merge(values, scope),
     tcons,
@@ -86,11 +123,12 @@ pub fn with_scope(env: TEnv, scope: dict.Dict(String, scheme.Scheme)) -> TEnv {
     modules,
     params,
     type_names,
+    refinements_pruned,
   )
 }
 
 pub fn resolve(env: TEnv, name: String) -> Result(scheme.Scheme, Nil) {
-  let TEnv(values, tcons, _, _, _, _, _) = env
+  let TEnv(values, tcons, _, _, _, _, _, _) = env
   case dict.get(values, name) {
     Ok(scheme_) -> Ok(scheme_)
     Error(_) ->
@@ -115,8 +153,16 @@ pub fn resolve_params(
   env: TEnv,
   name: String,
 ) -> Result(List(option.Option(String)), Nil) {
-  let TEnv(_values, tcons, _types, _aliases, _modules, params, _type_names) =
-    env
+  let TEnv(
+    _values,
+    tcons,
+    _types,
+    _aliases,
+    _modules,
+    params,
+    _type_names,
+    _refinements,
+  ) = env
   case dict.get(params, name) {
     Ok(params_) -> Ok(params_)
     Error(_) ->
@@ -134,7 +180,16 @@ pub fn resolve_params(
 }
 
 pub fn with_type_name(env: TEnv, name: String, qualified: String) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
   TEnv(
     values,
     tcons,
@@ -143,23 +198,49 @@ pub fn with_type_name(env: TEnv, name: String, qualified: String) -> TEnv {
     modules,
     params,
     dict.insert(type_names, name, qualified),
+    refinements,
   )
 }
 
 pub fn resolve_type_name(env: TEnv, name: String) -> Result(String, Nil) {
-  let TEnv(_values, _tcons, _types, _aliases, _modules, _params, type_names) =
-    env
+  let TEnv(
+    _values,
+    _tcons,
+    _types,
+    _aliases,
+    _modules,
+    _params,
+    type_names,
+    _refinements,
+  ) = env
   dict.get(type_names, name)
 }
 
 pub fn type_exists(env: TEnv, name: String) -> Bool {
-  let TEnv(_values, _tcons, types_, aliases, _modules, _params, _type_names) =
-    env
+  let TEnv(
+    _values,
+    _tcons,
+    types_,
+    aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = env
   dict.has_key(types_, name) || dict.has_key(aliases, name)
 }
 
 pub fn with_module(env: TEnv, alias: String, module_name: String) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
   TEnv(
     values,
     tcons,
@@ -168,17 +249,26 @@ pub fn with_module(env: TEnv, alias: String, module_name: String) -> TEnv {
     dict.insert(modules, alias, module_name),
     params,
     type_names,
+    refinements,
   )
 }
 
 pub fn resolve_module(env: TEnv, alias: String) -> Result(String, Nil) {
-  let TEnv(_values, _tcons, _types, _aliases, modules, _params, _type_names) =
-    env
+  let TEnv(
+    _values,
+    _tcons,
+    _types,
+    _aliases,
+    modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = env
   dict.get(modules, alias)
 }
 
 pub fn type_free(env: TEnv) -> set.Set(String) {
-  let TEnv(values, _, _, _, _, _, _) = env
+  let TEnv(values, _, _, _, _, _, _, _) = env
   values
   |> dict.values
   |> list.map(scheme.scheme_free)
@@ -186,7 +276,16 @@ pub fn type_free(env: TEnv) -> set.Set(String) {
 }
 
 pub fn apply(subst: types.Subst, env: TEnv) -> TEnv {
-  let TEnv(values, tcons, types_, aliases, modules, params, type_names) = env
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
   TEnv(
     scope_apply(subst, values),
     tcons,
@@ -195,6 +294,7 @@ pub fn apply(subst: types.Subst, env: TEnv) -> TEnv {
     modules,
     params,
     type_names,
+    refinements,
   )
 }
 
@@ -207,4 +307,44 @@ pub fn scope_apply(
 
 pub fn generalize(env: TEnv, type_: types.Type) -> scheme.Scheme {
   scheme.Forall(set.difference(types.type_free(type_), type_free(env)), type_)
+}
+
+pub fn with_refinements(
+  env: TEnv,
+  refinements_: dict.Dict(String, String),
+) -> TEnv {
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    refinements,
+  ) = env
+  TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    modules,
+    params,
+    type_names,
+    dict.merge(refinements, refinements_),
+  )
+}
+
+pub fn resolve_refinement(env: TEnv, name: String) -> Result(String, Nil) {
+  let TEnv(
+    _values,
+    _tcons,
+    _types,
+    _aliases,
+    _modules,
+    _params,
+    _type_names,
+    refinements,
+  ) = env
+  dict.get(refinements, name)
 }

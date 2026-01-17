@@ -97,7 +97,7 @@ fn infer_source(
                       list.map(names, fn(name) {
                         case env.resolve(env_final, name) {
                           Ok(scheme) ->
-                            Ok(#(name, gloat.scheme_to_string(scheme)))
+                            Ok(#(name, gloat.scheme_to_string_gleam(scheme)))
                           Error(_) ->
                             Error("Definition not found in env: " <> name)
                         }
@@ -245,6 +245,7 @@ fn module_exports_env(
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = module_env
       let tcons_filtered =
         filter_dict(tcons, constructor_names)
@@ -263,6 +264,7 @@ fn module_exports_env(
         aliases_filtered,
         dict.new(),
         params,
+        dict.new(),
         dict.new(),
       ))
     },

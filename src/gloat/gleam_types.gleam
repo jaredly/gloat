@@ -1,4 +1,5 @@
 import glance as g
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/result
@@ -10,8 +11,16 @@ pub type Error {
 }
 
 pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
-  let env.TEnv(_values, _tcons, _types, aliases, _modules, _params, _type_names) =
-    tenv
+  let env.TEnv(
+    _values,
+    _tcons,
+    _types,
+    aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = tenv
   case type_expr {
     g.NamedType(span, name, module, parameters) -> {
       let resolved = case name {
@@ -67,7 +76,8 @@ pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
       )
       |> result.flatten
 
-    g.HoleType(_, _) -> Error(Unsupported("type hole"))
+    g.HoleType(span, _label) ->
+      Ok(types.Tvar("hole_" <> int.to_string(loc_from_span(span)), span))
   }
 }
 

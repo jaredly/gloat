@@ -7,6 +7,7 @@ import gleam/option
 import gleam/set
 import gloat/env
 import gloat/infer_state as is
+import gloat/literals
 import gloat/types
 
 pub type ExPattern {
@@ -45,7 +46,7 @@ pub fn pattern_to_ex_pattern(
     g.PatternDiscard(_, _) -> is.ok(ExAny)
     g.PatternString(_, str) -> is.ok(ExConstructor(str, "String", []))
     g.PatternInt(span, value) ->
-      case int.parse(value) {
+      case literals.parse_int_literal(value) {
         Ok(v) -> is.ok(ExConstructor(int.to_string(v), "Int", []))
         Error(_) -> is.error("Invalid int pattern", span)
       }
@@ -100,6 +101,7 @@ pub fn pattern_to_ex_pattern(
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = tenv
       let constructor_name = case module {
         option.None -> Ok(name)
@@ -339,6 +341,7 @@ fn group_constructors(tenv: env.TEnv, gid: String) -> List(String) {
         _modules,
         _params,
         _type_names,
+        _refinements,
       ) = tenv
       case dict.get(types, gid) {
         Error(_) -> []
