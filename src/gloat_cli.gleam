@@ -97,7 +97,7 @@ fn infer_source(
                       list.map(names, fn(name) {
                         case env.resolve(env_final, name) {
                           Ok(scheme) ->
-                            Ok(#(name, gloat.scheme_to_string_gleam(scheme)))
+                            Ok(#(name, gloat.scheme_to_string(scheme)))
                           Error(_) ->
                             Error("Definition not found in env: " <> name)
                         }

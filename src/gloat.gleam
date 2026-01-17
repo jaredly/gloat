@@ -66,18 +66,18 @@ pub fn infer_expr(
   is.run_empty(infer.infer_expr(tenv, expr))
 }
 
-pub fn type_to_string(type_: types.Type) -> String {
+pub fn type_to_string_debug(type_: types.Type) -> String {
   types.type_to_string(type_)
 }
 
-pub fn type_to_string_gleam(type_: types.Type) -> String {
+pub fn type_to_string(type_: types.Type) -> String {
   types.type_to_string_gleam(type_)
 }
 
-pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
+pub fn scheme_to_string_debug(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string(scheme_)
 }
 
-pub fn scheme_to_string_gleam(scheme_: scheme.Scheme) -> String {
+pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string_gleam(scheme_)
 }

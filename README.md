@@ -18,6 +18,7 @@ pub fn main() -> Nil {
     let assert Ok(tenv) = gloat.add_module(gloat.builtin_env(), module)
     let assert Some(scheme_) = gloat.resolve(tenv, "four")
     io.println(gloat.scheme_to_string(scheme_))
+    // prints "fn () -> Int"
 }
 ```
 

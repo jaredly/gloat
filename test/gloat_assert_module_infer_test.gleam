@@ -61,8 +61,7 @@ fn infer_module(
             result.all(
               list.map(names, fn(name) {
                 case env.resolve(env2, name) {
-                  Ok(scheme_) ->
-                    Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
+                  Ok(scheme_) -> Ok(#(name, gloat.scheme_to_string(scheme_)))
                   Error(_) ->
                     Error(type_error.new(
                       "definition not found in env: " <> name,

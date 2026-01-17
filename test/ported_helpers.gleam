@@ -21,7 +21,7 @@ pub fn assert_infer(code: String) -> Result(String, gloat.TypeError) {
   let module_code = "const top = {\n" <> code <> "\n}"
   result.map(
     infer_scheme_from_glance(module_code, "top"),
-    gloat.scheme_to_string_gleam,
+    gloat.scheme_to_string,
   )
 }
 
@@ -97,8 +97,7 @@ fn infer_module(
             result.all(
               list.map(names, fn(name) {
                 case env.resolve(env2, name) {
-                  Ok(scheme_) ->
-                    Ok(#(name, gloat.scheme_to_string_gleam(scheme_)))
+                  Ok(scheme_) -> Ok(#(name, gloat.scheme_to_string(scheme_)))
                   Error(_) ->
                     Error(type_error.new(
                       "definition not found in env: " <> name,

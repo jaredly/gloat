@@ -43,7 +43,10 @@ pub fn infer_from_glance_const_test() {
 pub fn infer_from_glance_identity_test() {
   let code = "\npub fn id(x) { x }\n"
   assert Ok("forall x:1 : (fn [x:1] x:1)")
-    == result.map(infer_scheme_from_glance(code, "id"), gloat.scheme_to_string)
+    == result.map(
+      infer_scheme_from_glance(code, "id"),
+      gloat.scheme_to_string_debug,
+    )
 }
 
 pub fn infer_from_glance_pair_test() {
@@ -51,7 +54,7 @@ pub fn infer_from_glance_pair_test() {
   assert Ok("forall a:1 b:2 : (fn [a:1 b:2] (, a:1 b:2))")
     == result.map(
       infer_scheme_from_glance(code, "pair"),
-      gloat.scheme_to_string,
+      gloat.scheme_to_string_debug,
     )
 }
 
@@ -291,7 +294,7 @@ pub fn record_update_from_glance_test() {
 }
 
 fn process(code, name) {
-  result.map(infer_scheme_from_glance(code, name), gloat.scheme_to_string)
+  result.map(infer_scheme_from_glance(code, name), gloat.scheme_to_string_debug)
 }
 
 fn is_error(res: Result(a, b)) -> Bool {

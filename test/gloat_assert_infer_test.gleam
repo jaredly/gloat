@@ -255,7 +255,7 @@ fn assert_infer(code: String) -> Result(String, gloat.TypeError) {
 }
 
 fn process(code, name) {
-  result.map(infer_scheme_from_glance(code, name), gloat.scheme_to_string_gleam)
+  result.map(infer_scheme_from_glance(code, name), gloat.scheme_to_string)
 }
 
 fn infer_scheme_from_glance(
