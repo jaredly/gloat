@@ -287,42 +287,51 @@ fn infer_expr_inner(
                   )
               }
             }
-            Error(_) ->
-              case env.resolve(tenv, name) {
-                Ok(_) -> infer_record_field_access(tenv, span, container, label)
-                Error(_) ->
-                  case env.resolve_module(tenv, name) {
-                    Ok(module_key) ->
-                      case env.resolve(tenv, module_key <> "/" <> label) {
-                        Ok(scheme_) -> instantiate(scheme_, span)
-                        Error(_) ->
-                          case module_key == "gleam" {
-                            True ->
-                              case env.resolve(tenv, label) {
-                                Ok(scheme_) -> instantiate(scheme_, span)
-                                Error(_) ->
-                                  is.error(
-                                    "Unknown module value "
-                                      <> module_key
-                                      <> "/"
-                                      <> label,
-                                    span,
-                                  )
-                              }
-                            False ->
-                              is.error(
-                                "Unknown module value "
-                                  <> module_key
-                                  <> "/"
-                                  <> label,
-                                span,
-                              )
-                          }
-                      }
+            Error(_) -> {
+              let module_value = case env.resolve_module(tenv, name) {
+                Ok(module_key) ->
+                  case env.resolve(tenv, module_key <> "/" <> label) {
+                    Ok(scheme_) -> option.Some(instantiate(scheme_, span))
                     Error(_) ->
+                      case module_key == "gleam" {
+                        True ->
+                          case env.resolve(tenv, label) {
+                            Ok(scheme_) ->
+                              option.Some(instantiate(scheme_, span))
+                            Error(_) -> option.None
+                          }
+                        False -> option.None
+                      }
+                  }
+                Error(_) -> option.None
+              }
+              case module_value {
+                option.Some(result) -> result
+                option.None ->
+                  case env.resolve(tenv, name) {
+                    Ok(_) ->
                       infer_record_field_access(tenv, span, container, label)
+                    Error(_) ->
+                      case env.resolve_module(tenv, name) {
+                        Ok(module_key) ->
+                          is.error(
+                            "Unknown module value "
+                              <> module_key
+                              <> "/"
+                              <> label,
+                            span,
+                          )
+                        Error(_) ->
+                          infer_record_field_access(
+                            tenv,
+                            span,
+                            container,
+                            label,
+                          )
+                      }
                   }
               }
+            }
           }
         _ -> infer_record_field_access(tenv, span, container, label)
       }
@@ -411,7 +420,10 @@ fn infer_block(
         }
         option.None -> is.ok(Nil)
       })
-      infer_block(tenv, rest, span)
+      case rest {
+        [] -> is.ok(types.Tcon("Nil", span))
+        _ -> infer_block(tenv, rest, span)
+      }
     }
 
     [g.Use(span, patterns, function), ..rest] ->
@@ -429,8 +441,9 @@ fn infer_use(
 ) -> is.InferState(types.Type) {
   use args <- is.bind(infer_use_patterns(tenv, patterns, span))
   let #(arg_types, scope) = args
+  use callback_result <- is.bind(new_type_var("use_callback", span))
+  let callback_type = types.Tfn(arg_types, callback_result, span)
   use result_var <- is.bind(new_type_var("use_result", span))
-  let callback_type = types.Tfn(arg_types, result_var, span)
   use _ignored <- is.bind(infer_use_function(
     tenv,
     span,
@@ -442,8 +455,8 @@ fn infer_use(
   use scope_applied <- is.bind(scope_apply_state(scope))
   let bound_env = env.with_scope(tenv, scope_applied)
   use rest_type <- is.bind(infer_block(bound_env, rest, block_span))
-  use _ignored2 <- is.bind(unify(result_var, rest_type, block_span))
-  type_apply_state(rest_type)
+  use _ignored2 <- is.bind(unify(callback_result, rest_type, block_span))
+  type_apply_state(result_var)
 }
 
 fn infer_use_function(
