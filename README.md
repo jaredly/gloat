@@ -20,6 +20,13 @@ pub fn main() -> Nil {
 
 Further documentation can be found at <https://hexdocs.pm/gloat>.
 
+## CLI
+
+```sh
+gleam run -m gloat_cli -- example-files/glexer/src/glexer.gleam example-files/stdlib/src/ example-files/splitter/src/
+```
+
+
 ## Development
 
 ```sh
@@ -30,3 +37,8 @@ gleam test  # Run the tests
 ## Status
 
 - [x] gleam stdlib type checks
+- [ ] can type check self and all dependencies
+  - [x] splitter
+  - [x] glexer
+  - [ ] glance
+  - [ ] self
