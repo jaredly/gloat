@@ -20,7 +20,6 @@ import gloat/types
 pub fn main() {
   case parse_args(start_arguments()) {
     Ok(#(path, lib_dirs, target)) -> {
-      io.println("Inferring " <> path)
       infer_file(path, lib_dirs, target)
     }
     Error(message) -> {

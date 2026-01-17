@@ -1,4 +1,5 @@
 import glance as g
+import gleam/option
 import gloat/builtins
 import gloat/env
 import gloat/glance as gloat_glance
@@ -38,6 +39,13 @@ pub fn add_module(
   module: g.Module,
 ) -> Result(env.TEnv, type_error.TypeError) {
   builtins.add_module(tenv, module)
+}
+
+pub fn resolve(tenv: env.TEnv, name: String) -> option.Option(Scheme) {
+  case env.resolve(tenv, name) {
+    Ok(scheme) -> option.Some(scheme)
+    _ -> option.None
+  }
 }
 
 pub fn add_module_with_target(
