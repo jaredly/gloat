@@ -12,6 +12,7 @@ import gleam/string
 import glexer.{Position}
 import gloat
 import gloat/env
+import gloat/glance as gloat_glance
 import gloat/scheme
 import gloat/type_error
 import gloat/types
@@ -51,7 +52,7 @@ fn infer_source(
   case glance.module(src) {
     Error(error) -> io.println_error(format_parse_error(path, src, error))
     Ok(parsed) -> {
-      let parsed = filter_module_for_target(parsed, target)
+      let parsed = gloat_glance.filter_module_for_target(parsed, target)
       let search_dirs = [dir_of_path(path), ..lib_dirs]
       let glance.Module(
         imports,
@@ -88,7 +89,7 @@ fn infer_source(
           case load_imports(env_, imports, search_dirs, set.new(), target) {
             Error(message) -> io.println_error(message)
             Ok(#(env_loaded, _visited)) -> {
-              case gloat.add_module(env_loaded, parsed) {
+              case gloat.add_module_with_target(env_loaded, parsed, target) {
                 Error(err) ->
                   io.println_error(format_type_error(path, src, err))
                 Ok(env_final) -> {
@@ -192,7 +193,7 @@ fn load_module(
             format_parse_error(path, src, error)
           }),
           fn(parsed) {
-            let parsed = filter_module_for_target(parsed, target)
+            let parsed = gloat_glance.filter_module_for_target(parsed, target)
             let glance.Module(imports, _custom_types, _type_aliases, _, _) =
               parsed
             result.try(
@@ -201,7 +202,7 @@ fn load_module(
                 let #(env_loaded, visited_loaded) = loaded
                 result.try(
                   result.map_error(
-                    gloat.add_module(env_loaded, parsed),
+                    gloat.add_module_with_target(env_loaded, parsed, target),
                     fn(err) { format_type_error(path, src, err) },
                   ),
                   fn(module_env) {
@@ -269,56 +270,6 @@ fn module_exports_env(
       ))
     },
   )
-}
-
-fn filter_module_for_target(
-  module: glance.Module,
-  target: String,
-) -> glance.Module {
-  let glance.Module(imports, custom_types, type_aliases, constants, functions) =
-    module
-  glance.Module(
-    list.filter(imports, fn(defn) { definition_matches_target(defn, target) }),
-    list.filter(custom_types, fn(defn) {
-      definition_matches_target(defn, target)
-    }),
-    list.filter(type_aliases, fn(defn) {
-      definition_matches_target(defn, target)
-    }),
-    list.filter(constants, fn(defn) { definition_matches_target(defn, target) }),
-    list.filter(functions, fn(defn) { definition_matches_target(defn, target) }),
-  )
-}
-
-fn definition_matches_target(defn: glance.Definition(a), target: String) -> Bool {
-  let glance.Definition(attributes, _definition) = defn
-  case target_from_attrs(attributes) {
-    option.None -> True
-    option.Some(target_name) -> target_name == target
-  }
-}
-
-fn target_from_attrs(attrs: List(glance.Attribute)) -> option.Option(String) {
-  list.fold(attrs, option.None, fn(acc, attr) {
-    case acc {
-      option.Some(_) -> acc
-      option.None -> {
-        let glance.Attribute(name, arguments) = attr
-        case name {
-          "target" -> target_from_args(arguments)
-          _ -> option.None
-        }
-      }
-    }
-  })
-}
-
-fn target_from_args(args: List(glance.Expression)) -> option.Option(String) {
-  case args {
-    [glance.Variable(_, name)] -> option.Some(name)
-    [glance.String(_, name)] -> option.Some(name)
-    _ -> option.None
-  }
 }
 
 fn qualified_values(
