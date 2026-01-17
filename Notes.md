@@ -21,3 +21,7 @@ What does the API look like?
   - only specifying a single label for a 3-arg record
   - my order of operations for type inference isn't working
     with `use` being treated as just a function.
+
+#
+
+OH the cli needs to just use `build/packages/*` right?

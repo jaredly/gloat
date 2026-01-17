@@ -10,11 +10,14 @@ gleam add gloat@1
 ```
 ```gleam
 import gloat
+import glance
 import io
 
 pub fn main() -> Nil {
-  let assert Ok(type_) = gloat.infer_expr(gloat.builtin_env(), "2 + 2")
-  io.println(gloat.type_to_string(type_))
+    # STOPSHIP this is wrong actually
+    let assert Ok(expr) = glance.expression("2 + 2")
+    let assert Ok(type_) = gloat.infer_expr(gloat.builtin_env(),expr)
+    io.println(gloat.type_to_string(type_))
 }
 ```
 
@@ -42,3 +45,12 @@ gleam test  # Run the tests
   - [x] glexer
   - [ ] glance
   - [ ] self
+
+## 🤖 Attribution
+
+Jared Forsyth hand-wrote the original version of a hindley-milner+ type checker written in a [custom clojure-like language](https://github.com/jaredly/j3/blob/main/data/tmp/algw-s2.clj).
+gtp-5.2-codex proceeded to do almost all of the work thereafter
+- porting to gleam
+- porting the official gleam compiler's type-checker-tests (written in rust) to gleam
+- modifying `gloat`'s type inference implementation such that the tests would pass
+- making a cli
