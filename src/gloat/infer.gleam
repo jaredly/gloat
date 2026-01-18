@@ -962,8 +962,21 @@ fn infer_constructor_call(
     Ok(name) -> {
       use args2 <- is.bind(instantiate_tcon(tenv, name, span))
       let #(cfields, cres) = args2
+      let has_labels =
+        list.any(fields, fn(field) {
+          let #(label, _expr) = field
+          label != option.None
+        })
+      let ordered_fields = case has_labels {
+        True ->
+          case reorder_constructor_fields(cfields, fields) {
+            Ok(exprs) -> list.map(exprs, fn(expr) { #(option.None, expr) })
+            Error(_) -> fields
+          }
+        False -> fields
+      }
       use matched <- is.bind(match_constructor_fields(
-        fields,
+        ordered_fields,
         cfields,
         span,
         False,
@@ -983,6 +996,78 @@ fn infer_constructor_call(
         }),
       )
       type_apply_state(cres)
+    }
+  }
+}
+
+fn reorder_constructor_fields(
+  cfields: List(#(option.Option(String), types.Type)),
+  fields: List(#(option.Option(String), g.Expression)),
+) -> Result(List(g.Expression), Nil) {
+  let labelled =
+    list.fold(fields, dict.new(), fn(acc, field) {
+      let #(label, expr) = field
+      case label {
+        option.Some(name) -> dict.insert(acc, name, expr)
+        option.None -> acc
+      }
+    })
+  let unlabelled =
+    list.fold(fields, [], fn(acc, field) {
+      let #(label, expr) = field
+      case label {
+        option.Some(_) -> acc
+        option.None -> [expr, ..acc]
+      }
+    })
+    |> list.reverse
+  reorder_constructor_fields_inner(cfields, labelled, unlabelled, [])
+}
+
+fn reorder_constructor_fields_inner(
+  cfields: List(#(option.Option(String), types.Type)),
+  labelled: dict.Dict(String, g.Expression),
+  unlabelled: List(g.Expression),
+  acc: List(g.Expression),
+) -> Result(List(g.Expression), Nil) {
+  case cfields {
+    [] ->
+      case list.is_empty(unlabelled) && dict.size(labelled) == 0 {
+        True -> Ok(list.reverse(acc))
+        False -> Error(Nil)
+      }
+    [cfield, ..rest] -> {
+      let #(maybe_label, _ctype) = cfield
+      case maybe_label {
+        option.Some(label) ->
+          case dict.get(labelled, label) {
+            Ok(expr) ->
+              reorder_constructor_fields_inner(
+                rest,
+                dict.delete(labelled, label),
+                unlabelled,
+                [expr, ..acc],
+              )
+            Error(_) ->
+              case unlabelled {
+                [expr, ..tail] ->
+                  reorder_constructor_fields_inner(rest, labelled, tail, [
+                    expr,
+                    ..acc
+                  ])
+                [] -> Error(Nil)
+              }
+          }
+        option.None ->
+          case unlabelled {
+            [expr, ..tail] ->
+              reorder_constructor_fields_inner(rest, labelled, tail, [
+                expr,
+                ..acc
+              ])
+            [] -> Error(Nil)
+          }
+      }
     }
   }
 }

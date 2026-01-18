@@ -68,6 +68,18 @@ pub fn mutual_recursion_test() {
   assert Ok("(fn [Int] Int)") == process(code, "even")
 }
 
+pub fn o2ne_label_out_of_position_test() {
+  let code =
+    "type Ex { Ex(one: Int, two: Int, three: Int) }\nfn top() { Ex(1, two: 2, 3) }"
+  assert Ok("(fn [] Ex)") == process(code, "top")
+}
+
+pub fn one_label_out_of_position_test() {
+  let code =
+    "type Ex { Ex(one: Int, two: Int, three: Int) }\nfn top() { Ex(1, 3, two: 2) }"
+  assert Ok("(fn [] Ex)") == process(code, "top")
+}
+
 pub fn mutual_recursion_oorder_test() {
   let code = "fn even(x) { x + odd(x) }\nconst x = \"hi\"\nfn odd(v) { v - 1 }"
   assert Ok("(fn [Int] Int)") == process(code, "even")
