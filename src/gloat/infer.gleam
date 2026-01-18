@@ -2353,9 +2353,50 @@ fn infer_record_field_access(
           use ctype <- is.bind(lookup_constructor_field(label, cfields, span))
           type_apply_state(ctype)
         }
-        Error(_) -> is.error("Record field access requires known type", span)
+        Error(_) -> field_type_for_any_constructor_label(tenv, label, span)
       }
     _ -> field_type_for_record_access(tenv, applied_target, label, span)
+  }
+}
+
+fn field_type_for_any_constructor_label(
+  tenv: env.TEnv,
+  label: String,
+  span: g.Span,
+) -> is.InferState(types.Type) {
+  let env.TEnv(
+    _values,
+    tcons,
+    _types,
+    _aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+  ) = tenv
+  use field_type <- is.bind(new_type_var("record_field", span))
+  use matched <- is.bind(
+    is.foldl_list(dict.to_list(tcons), False, fn(found, pair) {
+      let #(name, #(_free, cfields, _cres)) = pair
+      case field_has_label(cfields, label) {
+        True -> {
+          use args2 <- is.bind(instantiate_tcon(tenv, name, span))
+          let #(inst_fields, _inst_res) = args2
+          use ctype <- is.bind(lookup_constructor_field(
+            label,
+            inst_fields,
+            span,
+          ))
+          use _ignored <- is.bind(unify(field_type, ctype, span))
+          is.ok(True)
+        }
+        False -> is.ok(found)
+      }
+    }),
+  )
+  case matched {
+    True -> type_apply_state(field_type)
+    False -> is.error("Record field access requires known type", span)
   }
 }
 

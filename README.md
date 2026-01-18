@@ -41,11 +41,11 @@ gleam test  # Run the tests
 ## Status
 
 - [x] gleam stdlib type checks
-- [ ] can type check self and all dependencies
+- [x] can type check self and all dependencies
   - [x] splitter
   - [x] glexer
-  - [ ] glance
-  - [ ] self
+  - [x] glance
+  - [x] self
 
 ## 🤖 Attribution
 
