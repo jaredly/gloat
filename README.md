@@ -27,7 +27,8 @@ Further documentation can be found at <https://hexdocs.pm/gloat>.
 ## CLI
 
 ```sh
-gleam run -m gloat_cli -- example-files/glexer/src/glexer.gleam example-files/stdlib/src/ example-files/splitter/src/
+gleam run -m gloat_cli -- src/gloat.gleam build/packages/glance/src/ build/packages/glexer/src/ build/packages/splitter/src/ build/packages/gleam_stdlib/src/
+# prints out the signatures of all functions in src/gloat.gleam
 ```
 
 
