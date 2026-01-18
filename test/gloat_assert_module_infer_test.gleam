@@ -666,6 +666,30 @@ pub fn infer_module_test31_test() {
     == assert_module_infer("pub type I { I(Num) } pub type Num { Num }")
 }
 
+pub fn known_type_test() {
+  assert Ok([#("ok", "fn() -> Int")])
+    == assert_module_infer(
+      "type Ex { Ex(one: Int, two: Int, three: Int) }
+    fn top(f) { f(Ex(1, 3, two: 2)) }
+    pub fn ok() {
+      use m <- top
+      m.one
+    }",
+    )
+}
+
+pub fn known_type_tuple_test() {
+  assert Ok([#("ok", "fn() -> Int")])
+    == assert_module_infer(
+      "type Ex { Ex(one: Int, two: Int, three: Int) }
+    fn top(f) { f(#(1, Ex(1, 3, two: 2))) }
+    pub fn ok() {
+      use #(_, m) <- top
+      m.one
+    }",
+    )
+}
+
 pub fn infer_module_test32_test() {
   assert Ok(
       sort_pairs([
