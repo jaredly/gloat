@@ -1,4 +1,4 @@
-import { basicSetup, EditorView } from "https://esm.sh/@codemirror/basic-setup@0.20.0";
+import { basicSetup, EditorView } from "https://esm.sh/codemirror@6.0.2";
 
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
@@ -169,9 +169,9 @@ function setStatus(text) {
 
 function formatTypeError(error, source) {
     if (!error) {
-        return "Type error.";
+        return "Type error. (no error?)";
     }
-    const message = error[0] || "Type error.";
+    const message = error[0] || "Type error. (no message)";
     const start = error[1];
     const end = error[2];
     if (typeof start !== "number" || typeof end !== "number") {
