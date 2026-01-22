@@ -67,10 +67,7 @@ const view = new EditorView({
         hoverField,
         EditorView.updateListener.of((update) => {
             if (update.docChanged) scheduleTypecheck();
-        }),
-        EditorView.domEventHandlers({
-            mousemove: (event, view) => handleHover(event, view),
-            mouseleave: () => hideHover(),
+            if (update.selectionSet) handleSelectionHover(update.view);
         }),
         githubDark,
         gleam(),
@@ -138,18 +135,19 @@ function buildHoverIndex(entries) {
     }));
 }
 
-function handleHover(event, view) {
+function handleSelectionHover(view) {
     if (!hoverIndex.length || hoverTimer) {
         return;
     }
 
     hoverTimer = requestAnimationFrame(() => {
         hoverTimer = null;
-        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        if (pos == null) {
+        const selection = view.state.selection.main;
+        if (!selection.empty) {
             hideHover();
             return;
         }
+        const pos = selection.head;
 
         const offset = byteOffsetAtPos(view.state.doc.toString(), pos);
         const matches = hoverIndex
