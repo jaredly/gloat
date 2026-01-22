@@ -168,6 +168,43 @@ button {
     gap: 12px;
 }
 
+.packages-card {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 18px;
+    border: 1px solid #e6d8c4;
+    display: grid;
+    gap: 12px;
+}
+
+.packages-card h2 {
+    margin: 0 0 6px;
+    font-size: 18px;
+}
+
+.packages-card textarea {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid #e1d6c4;
+    padding: 12px;
+    font-family: var(--mono);
+    resize: vertical;
+    min-height: 90px;
+    background: #fff;
+}
+
+.packages-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.packages-status {
+    font-size: 13px;
+    color: var(--muted);
+}
+
 .status-card {
     background: var(--panel-strong);
     border-radius: 14px;

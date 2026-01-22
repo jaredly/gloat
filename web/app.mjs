@@ -3,12 +3,15 @@ import { Decoration } from "https://esm.sh/@codemirror/view";
 import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
 import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
 import { basicSetup, EditorView } from "https://esm.sh/codemirror";
+import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
 import stdlib from "../stdlib.js";
 
-const tenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
+const baseTenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
+let tenv = baseTenv;
+let packageSources = [];
 
 const MODULE_KEY = "repl";
 const encoder = new TextEncoder();
@@ -18,6 +21,9 @@ const statusText = document.getElementById("status-text");
 const detailsEl = document.getElementById("details");
 const targetSelect = document.getElementById("target");
 const resetButton = document.getElementById("reset");
+const packagesInput = document.getElementById("packages");
+const loadPackagesButton = document.getElementById("load-packages");
+const packagesStatus = document.getElementById("packages-status");
 
 const sample = `import gleam/int
 import gleam/list
@@ -82,7 +88,14 @@ resetButton.addEventListener("click", () => {
 });
 
 targetSelect.addEventListener("change", () => {
+    if (packageSources.length) {
+        rebuildPackageEnv();
+    }
     scheduleTypecheck();
+});
+
+loadPackagesButton.addEventListener("click", () => {
+    loadPackages();
 });
 
 scheduleTypecheck();
@@ -96,9 +109,7 @@ function runTypecheck() {
     const source = view.state.doc.toString();
     lastSource = source;
     const target = targetSelect.value;
-    console.log("tenv", tenv);
     const result = gloatWeb.analyze(source, target, MODULE_KEY, tenv);
-    console.log(result);
 
     if (result instanceof ResultError) {
         lastGoodEnv = null;
@@ -133,6 +144,170 @@ function buildHoverIndex(entries) {
         end,
         types: types.toArray(),
     }));
+}
+
+async function loadPackages() {
+    const specs = parsePackageSpecs(packagesInput.value);
+    if (!specs.length) {
+        setPackagesStatus("No packages specified.");
+        return;
+    }
+    setPackagesStatus("Downloading packages...");
+    try {
+        const entries = [];
+        for (const spec of specs) {
+            const sources = await fetchPackageSources(spec.name, spec.version);
+            entries.push(...sources);
+        }
+        packageSources = entries;
+        setPackagesStatus(`Loaded ${entries.length} modules.`);
+        await rebuildPackageEnv();
+        scheduleTypecheck();
+    } catch (error) {
+        setPackagesStatus(`Failed: ${error.message || error}`);
+    }
+}
+
+async function rebuildPackageEnv() {
+    if (!packageSources.length) {
+        return;
+    }
+    const target = targetSelect.value;
+    const jsonPayload = JSON.stringify(packageSources);
+    const result = gloatWeb.load_sources_json(baseTenv, jsonPayload, target);
+    if (result instanceof ResultError) {
+        setPackagesStatus(`Decode failed: ${result[0]}`);
+        return;
+    }
+    tenv = result[0];
+}
+
+function parsePackageSpecs(input) {
+    return input
+        .split(/[\n,]+/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((item) => {
+            const [name, version] = item.split("@");
+            return { name: name.trim(), version: version?.trim() || null };
+        });
+}
+
+async function fetchPackageSources(name, version) {
+    const resolved = version || (await fetchLatestVersion(name));
+    const url = `https://repo.hex.pm/tarballs/${name}-${resolved}.tar`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch ${name}@${resolved}`);
+    }
+    let buffer = new Uint8Array(await response.arrayBuffer());
+    if (isGzip(buffer)) {
+        buffer = gunzipSync(buffer);
+    }
+    const entries = extractTar(buffer);
+    const decoder = new TextDecoder();
+    return entries
+        .map((entry) => {
+            const moduleName = moduleFromPath(entry.name);
+            if (!moduleName) {
+                return null;
+            }
+            return {
+                module: moduleName,
+                src: decoder.decode(entry.data),
+            };
+        })
+        .filter(Boolean);
+}
+
+async function fetchLatestVersion(name) {
+    const response = await fetch(`https://hex.pm/api/packages/${name}`);
+    if (!response.ok) {
+        throw new Error(`Failed to resolve ${name} version`);
+    }
+    const data = await response.json();
+    return (
+        data.latest_version ||
+        data.latest_stable_version ||
+        (data.releases && data.releases[0] && data.releases[0].version) ||
+        (() => {
+            throw new Error(`No release info for ${name}`);
+        })()
+    );
+}
+
+function isGzip(data) {
+    return data.length > 2 && data[0] === 0x1f && data[1] === 0x8b;
+}
+
+function extractTar(data) {
+    const entries = [];
+    let offset = 0;
+    while (offset + 512 <= data.length) {
+        const header = data.subarray(offset, offset + 512);
+        if (isAllZero(header)) {
+            break;
+        }
+        const name = readString(header, 0, 100);
+        const prefix = readString(header, 345, 155);
+        const size = parseOctal(readString(header, 124, 12));
+        const typeFlag = header[156];
+        const fullName = prefix ? `${prefix}/${name}` : name;
+        const dataStart = offset + 512;
+        const dataEnd = dataStart + size;
+        if (typeFlag !== 53 && size > 0) {
+            entries.push({
+                name: fullName,
+                data: data.subarray(dataStart, dataEnd),
+            });
+        }
+        offset = dataStart + Math.ceil(size / 512) * 512;
+    }
+    return entries;
+}
+
+function readString(buffer, start, length) {
+    const slice = buffer.subarray(start, start + length);
+    let end = 0;
+    while (end < slice.length && slice[end] !== 0) {
+        end += 1;
+    }
+    return new TextDecoder().decode(slice.subarray(0, end));
+}
+
+function parseOctal(value) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return 0;
+    }
+    return parseInt(trimmed, 8);
+}
+
+function isAllZero(buffer) {
+    for (let i = 0; i < buffer.length; i += 1) {
+        if (buffer[i] !== 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function moduleFromPath(path) {
+    const srcIndex = path.indexOf("/src/");
+    let rel = null;
+    if (srcIndex >= 0) {
+        rel = path.slice(srcIndex + 5);
+    } else if (path.startsWith("src/")) {
+        rel = path.slice(4);
+    }
+    if (!rel || !rel.endsWith(".gleam")) {
+        return null;
+    }
+    return rel.slice(0, -6);
+}
+
+function setPackagesStatus(message) {
+    packagesStatus.textContent = message;
 }
 
 function handleSelectionHover(view) {
