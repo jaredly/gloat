@@ -330,11 +330,14 @@ function setPackagesStatus(message) {
 }
 
 function handleHover(event, view) {
-    if (!hoverIndex.length || hoverTimer) {
+    if (!hoverIndex.length) {
         return;
     }
+    if (hoverTimer) {
+        clearTimeout(hoverTimer);
+    }
 
-    hoverTimer = requestAnimationFrame(() => {
+    hoverTimer = setTimeout(() => {
         hoverTimer = null;
         const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
         // const selection = view.state.selection.main;
@@ -387,7 +390,7 @@ function handleHover(event, view) {
         hoverEl.style.left = `${coords.left + 12}px`;
         hoverEl.style.top = `${coords.bottom + 12}px`;
         hoverEl.classList.remove("hidden");
-    });
+    }, 300);
 }
 
 function hideHover() {
