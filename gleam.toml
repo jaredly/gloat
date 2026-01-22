@@ -13,7 +13,8 @@ repository = { type = "github", user = "jaredly", repo = "gloat" }
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
-glexer = ">= 2.3.0 and < 3.0.0"
+# glexer = ">= 2.3.0 and < 3.0.0"
+glexer = { path = "./glexer" }
 glance = ">= 6.0.0 and < 7.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
 

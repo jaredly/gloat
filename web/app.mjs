@@ -7,9 +7,10 @@ import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
-import stdlib from "../stdlib.js";
+// import stdlib from "../stdlib.js";
 
-const baseTenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
+const baseTenv = gloat.builtin_env();
+// const baseTenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
 let tenv = baseTenv;
 let packageSources = [];
 
@@ -73,7 +74,11 @@ const view = new EditorView({
         hoverField,
         EditorView.updateListener.of((update) => {
             if (update.docChanged) scheduleTypecheck();
-            if (update.selectionSet) handleSelectionHover(update.view);
+            // if (update.selectionSet) handleSelectionHover(update.view);
+        }),
+        EditorView.domEventHandlers({
+            mousemove: (event, view) => handleHover(event, view),
+            mouseleave: () => hideHover(),
         }),
         githubDark,
         gleam(),
@@ -193,21 +198,35 @@ function parsePackageSpecs(input) {
         });
 }
 
-async function fetchPackageSources(name, version) {
-    const resolved = version || (await fetchLatestVersion(name));
-    const url = `https://repo.hex.pm/tarballs/${name}-${resolved}.tar`;
+const mainTar = async (name, resolved) => {
+    const url = `https://cdn.jsdelivr.net/hex/tarballs/${name}-${resolved}.tar`;
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to fetch ${name}@${resolved}`);
     }
-    let buffer = new Uint8Array(await response.arrayBuffer());
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    return extractTarGz(buffer);
+};
+
+const extractTarGz = (buffer) => {
     if (isGzip(buffer)) {
         buffer = gunzipSync(buffer);
     }
-    const entries = extractTar(buffer);
+    return extractTar(buffer);
+};
+
+async function fetchPackageSources(name, version) {
+    console.log("fetching", name);
+    const resolved = version || (await fetchLatestVersion(name));
     const decoder = new TextDecoder();
-    return entries
+    const mainEntries = await mainTar(name, resolved);
+    const contents = mainEntries.find((e) => e.name === "contents.tar.gz");
+    if (!contents) throw new Error(`no contents.tar.gz`);
+    const contentsEntries = extractTarGz(contents.data);
+
+    return contentsEntries
         .map((entry) => {
+            // console.log("contents entry", entry);
             const moduleName = moduleFromPath(entry.name);
             if (!moduleName) {
                 return null;
@@ -310,19 +329,20 @@ function setPackagesStatus(message) {
     packagesStatus.textContent = message;
 }
 
-function handleSelectionHover(view) {
+function handleHover(event, view) {
     if (!hoverIndex.length || hoverTimer) {
         return;
     }
 
     hoverTimer = requestAnimationFrame(() => {
         hoverTimer = null;
-        const selection = view.state.selection.main;
-        if (!selection.empty) {
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        // const selection = view.state.selection.main;
+        if (!pos) {
             hideHover();
             return;
         }
-        const pos = selection.head;
+        // const pos = selection.head;
 
         const offset = byteOffsetAtPos(view.state.doc.toString(), pos);
         const matches = hoverIndex

@@ -110,14 +110,16 @@ fn fold_modules(
 ) -> Result(#(env.TEnv, set.Set(String)), String) {
   case modules {
     [] -> Ok(#(tenv, visited))
-    [module_name, ..rest] ->
-      result.try(
-        load_module(tenv, module_name, sources, visited, target),
-        fn(state) {
-          let #(env_loaded, visited_loaded) = state
-          fold_modules(rest, env_loaded, visited_loaded, sources, target)
-        },
-      )
+    [module_name, ..rest] -> {
+      use #(env_loaded, visited_loaded) <- result.try(load_module(
+        tenv,
+        module_name,
+        sources,
+        visited,
+        target,
+      ))
+      fold_modules(rest, env_loaded, visited_loaded, sources, target)
+    }
   }
 }
 
@@ -134,41 +136,40 @@ fn load_module(
       let visited = set.insert(visited, module_name)
       case dict.get(sources, module_name) {
         Error(_) -> Error("Module not found: " <> module_name)
-        Ok(src) ->
-          result.try(
+        Ok(src) -> {
+          use parsed <- result.try(
             result.map_error(g.module(src), fn(_err) {
               "Parse error in module: " <> module_name
             }),
-            fn(parsed) {
-              let parsed = gloat_glance.filter_module_for_target(parsed, target)
-              let g.Module(imports, _custom_types, _type_aliases, _, _) = parsed
+          )
+          let parsed = gloat_glance.filter_module_for_target(parsed, target)
+          let g.Module(imports, _custom_types, _type_aliases, _, _) = parsed
+          result.try(
+            load_imports(tenv, imports, sources, visited, target),
+            fn(loaded) {
+              let #(env_loaded, visited_loaded) = loaded
               result.try(
-                load_imports(tenv, imports, sources, visited, target),
-                fn(loaded) {
-                  let #(env_loaded, visited_loaded) = loaded
-                  result.try(
-                    result.map_error(
-                      gloat.add_module_with_target(
-                        env_loaded,
-                        parsed,
-                        target,
-                        module_name,
-                      ),
-                      fn(_err) { "Type error in module: " <> module_name },
-                    ),
-                    fn(module_env) {
-                      result.map(
-                        module_exports_env(module_name, module_env, parsed),
-                        fn(exports) {
-                          #(env.merge(env_loaded, exports), visited_loaded)
-                        },
-                      )
+                result.map_error(
+                  gloat.add_module_with_target(
+                    env_loaded,
+                    parsed,
+                    target,
+                    module_name,
+                  ),
+                  fn(_err) { "Type error in module: " <> module_name },
+                ),
+                fn(module_env) {
+                  result.map(
+                    module_exports_env(module_name, module_env, parsed),
+                    fn(exports) {
+                      #(env.merge(env_loaded, exports), visited_loaded)
                     },
                   )
                 },
               )
             },
           )
+        }
       }
     }
   }

@@ -28,8 +28,8 @@
 
             <section class="editor-panel">
                 <div id="editor" class="editor"></div>
-                <div id="hover" class="hover hidden" role="tooltip"></div>
             </section>
+            <div id="hover" class="hover hidden" role="tooltip"></div>
 
             <section class="packages">
                 <div class="packages-card">
@@ -37,7 +37,7 @@
                         <h2>Package Loader</h2>
                         <p class="subhead">Enter Hex package names (one per line). Use <code>@</code> to pin a version.</p>
                     </div>
-                    <textarea id="packages" rows="4" placeholder="gleam_stdlib@0.44.0&#10;glexer@2.3.0"></textarea>
+                    <textarea id="packages" rows="4" placeholder="gleam_stdlib@0.44.0&#10;glexer@2.3.0">gleam_stdlib</textarea>
                     <div class="packages-actions">
                         <button id="load-packages">Load Packages</button>
                         <span id="packages-status" class="packages-status">No packages loaded.</span>
