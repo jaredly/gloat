@@ -139,8 +139,7 @@ button {
 }
 
 .cm-hover-highlight {
-    background: red;
-    /*background: rgba(217, 95, 64, 0.25);*/
+    background: rgba(217, 95, 64, 0.25);
     border-radius: 6px;
 }
 

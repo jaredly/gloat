@@ -1,13 +1,12 @@
-import { basicSetup, EditorView } from "https://esm.sh/codemirror@6.0.2";
-import { StateEffect, StateField } from "https://esm.sh/@codemirror/state@6.4.1";
-import { Decoration } from "https://esm.sh/@codemirror/view@6.26.2";
-import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
+import { StateEffect, StateField } from "https://esm.sh/@codemirror/state";
+import { Decoration } from "https://esm.sh/@codemirror/view";
 import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
-import stdlib from "../stdlib.js";
-
+import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
+import { basicSetup, EditorView } from "https://esm.sh/codemirror";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
-import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
 import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
+import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
+import stdlib from "../stdlib.js";
 
 const tenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
 
@@ -235,7 +234,10 @@ function highlightRange(view, span) {
     }
     const source = view.state.doc.toString();
     const from = posFromByteOffset(source, span.start);
-    const to = posFromByteOffset(source, span.end);
+    let to = posFromByteOffset(source, span.end);
+    if (to <= from) {
+        to = Math.min(from + 1, view.state.doc.length);
+    }
     if (lastHoverRange && lastHoverRange.from === from && lastHoverRange.to === to) {
         return;
     }
