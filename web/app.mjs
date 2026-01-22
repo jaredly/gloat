@@ -1,4 +1,6 @@
 import { basicSetup, EditorView } from "https://esm.sh/codemirror@6.0.2";
+import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
+import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
 
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
@@ -42,6 +44,8 @@ const view = new EditorView({
             mousemove: (event, view) => handleHover(event, view),
             mouseleave: () => hideHover(),
         }),
+        githubDark,
+        gleam(),
     ],
     parent: document.getElementById("editor"),
 });

@@ -2,6 +2,7 @@ import glance as g
 import gleam/option
 import gloat/builtins
 import gloat/env
+import gloat/env_json
 import gloat/glance as gloat_glance
 import gloat/infer
 import gloat/infer_state as is
@@ -82,4 +83,12 @@ pub fn scheme_to_string_debug(scheme_: scheme.Scheme) -> String {
 
 pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string_gleam(scheme_)
+}
+
+pub fn tenv_to_json(tenv: env.TEnv) -> String {
+  env_json.encode(tenv)
+}
+
+pub fn tenv_from_json(input: String) -> Result(env.TEnv, String) {
+  env_json.decode(input)
 }
