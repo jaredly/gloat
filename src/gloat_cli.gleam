@@ -134,7 +134,11 @@ fn export_tenv_if_requested(tenv: env.TEnv, export_path: option.Option(String)) 
   case export_path {
     option.None -> Nil
     option.Some(path) -> {
-      let payload = gloat.tenv_to_json(tenv)
+      let json = gloat.tenv_to_json(tenv)
+      let payload = case string.ends_with(path, ".js") {
+        True -> "export default " <> json
+        False -> json
+      }
       case write_file_text(path, payload) {
         Ok(_) -> io.println("Wrote TEnv JSON to " <> path)
         Error(message) ->
@@ -723,7 +727,7 @@ fn charlist_to_string(a: Charlist) -> String
 @external(javascript, "./gloat_cli_ffi.mjs", "read_file")
 fn read_file(path: String) -> Result(BitArray, dynamic.Dynamic)
 
-@external(erlang, "file", "write_file")
+@external(erlang, "gloat_cli_ffi", "write_file")
 @external(javascript, "./gloat_cli_ffi.mjs", "write_file")
 fn write_file(path: String, data: BitArray) -> Result(Nil, dynamic.Dynamic)
 
