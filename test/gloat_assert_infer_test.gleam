@@ -264,7 +264,7 @@ fn infer_scheme_from_glance(
 ) -> Result(gloat.Scheme, gloat.TypeError) {
   let assert Ok(parsed) = glance.module(code)
   result.try(
-    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang"),
+    gloat.add_module_with_target(gloat.builtin_env(), parsed, "erlang", "test"),
     fn(env_) {
       case env.resolve(env_, name) {
         Ok(scheme) -> Ok(scheme)

@@ -88,7 +88,9 @@ fn infer_source(
           case load_imports(env_, imports, search_dirs, set.new(), target) {
             Error(message) -> io.println_error(message)
             Ok(#(env_loaded, _visited)) -> {
-              case gloat.add_module_with_target(env_loaded, parsed, target) {
+              case
+                gloat.add_module_with_target(env_loaded, parsed, target, path)
+              {
                 Error(err) ->
                   io.println_error(format_type_error(path, src, err))
                 Ok(env_final) -> {
@@ -201,7 +203,12 @@ fn load_module(
                 let #(env_loaded, visited_loaded) = loaded
                 result.try(
                   result.map_error(
-                    gloat.add_module_with_target(env_loaded, parsed, target),
+                    gloat.add_module_with_target(
+                      env_loaded,
+                      parsed,
+                      target,
+                      module_name,
+                    ),
                     fn(err) { format_type_error(path, src, err) },
                   ),
                   fn(module_env) {
@@ -234,6 +241,10 @@ fn module_exports_env(
   let type_names = module_type_names(parsed)
   let alias_names = module_alias_names(parsed)
   let type_name_map = type_name_map(module_key, type_names, alias_names)
+  let hover = case env.hover_for_module(module_env, module_name) {
+    Ok(map) -> dict.from_list([#(module_name, map)])
+    Error(_) -> dict.new()
+  }
   result.try(
     qualified_values(module_env, module_key, exported, type_name_map),
     fn(values) {
@@ -246,6 +257,7 @@ fn module_exports_env(
         _params,
         _type_names,
         _refinements,
+        _hover,
       ) = module_env
       let tcons_filtered =
         filter_dict(tcons, constructor_names)
@@ -266,6 +278,7 @@ fn module_exports_env(
         params,
         dict.new(),
         dict.new(),
+        hover,
       ))
     },
   )

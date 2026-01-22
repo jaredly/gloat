@@ -26,369 +26,407 @@ pub fn infer_expr(
   is.ok(type_)
 }
 
+fn record_expr(
+  span: g.Span,
+  st: is.InferState(types.Type),
+) -> is.InferState(types.Type) {
+  is.bind(st, fn(type_) {
+    use applied <- is.bind(type_apply_state(type_))
+    use _ignored <- is.bind(is.add_hover(span, applied))
+    is.ok(type_)
+  })
+}
+
 fn infer_expr_inner(
   tenv: env.TEnv,
   expr: g.Expression,
 ) -> is.InferState(types.Type) {
   case expr {
-    g.Int(span, value) -> {
-      case literals.parse_int_literal(value) {
-        Ok(_) -> is.ok(types.Tcon("Int", span))
-        Error(_) -> is.error("Invalid int literal", span)
-      }
-    }
-
-    g.Float(span, value) -> {
-      let normalized =
-        string.replace(value, "_", "")
-        <> case string.ends_with(value, ".") {
-          True -> "0"
-          False -> ""
+    g.Int(span, value) ->
+      record_expr(span, {
+        case literals.parse_int_literal(value) {
+          Ok(_) -> is.ok(types.Tcon("Int", span))
+          Error(_) -> is.error("Invalid int literal", span)
         }
-      case float.parse(normalized) {
-        Ok(_) -> is.ok(types.Tcon("Float", span))
-        Error(_) -> is.error("Invalid float literal", span)
-      }
-    }
+      })
 
-    g.String(span, _value) -> is.ok(types.Tcon("String", span))
+    g.Float(span, value) ->
+      record_expr(span, {
+        let normalized =
+          string.replace(value, "_", "")
+          <> case string.ends_with(value, ".") {
+            True -> "0"
+            False -> ""
+          }
+        case float.parse(normalized) {
+          Ok(_) -> is.ok(types.Tcon("Float", span))
+          Error(_) -> is.error("Invalid float literal", span)
+        }
+      })
+
+    g.String(span, _value) ->
+      record_expr(span, is.ok(types.Tcon("String", span)))
 
     g.Variable(span, name) ->
-      case env.resolve(tenv, name) {
+      record_expr(span, case env.resolve(tenv, name) {
         Ok(scheme_) -> instantiate(scheme_, span)
         Error(_) -> is.error("Variable not found in scope: " <> name, span)
-      }
-
-    g.NegateInt(span, value) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use value_type <- is.bind(infer_expr_inner(tenv, value))
-      use _ignored <- is.bind(unify(value_type, types.Tcon("Int", span), span))
-      is.ok(types.Tcon("Int", span))
-    }
-
-    g.NegateBool(span, value) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use value_type <- is.bind(infer_expr_inner(tenv, value))
-      use _ignored <- is.bind(unify(value_type, types.Tcon("Bool", span), span))
-      is.ok(types.Tcon("Bool", span))
-    }
-
-    g.Block(span, statements) -> infer_block(tenv, statements, span)
-
-    g.Panic(span, message) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- is.bind(case message {
-        option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
-          unify(msg_type, types.Tcon("String", span), span)
-        }
-        option.None -> is.ok(Nil)
       })
-      new_type_var("panic", span)
-    }
 
-    g.Todo(span, message) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- is.bind(case message {
-        option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
-          unify(msg_type, types.Tcon("String", span), span)
-        }
-        option.None -> is.ok(Nil)
+    g.NegateInt(span, value) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use value_type <- is.bind(infer_expr_inner(tenv, value))
+        use _ignored <- is.bind(unify(value_type, types.Tcon("Int", span), span))
+        is.ok(types.Tcon("Int", span))
       })
-      new_type_var("todo", span)
-    }
 
-    g.Tuple(span, items) -> {
-      use item_types <- is.bind(
-        is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
-      )
-      is.ok(types.Ttuple(item_types, span))
-    }
-
-    g.TupleIndex(span, target, index) -> {
-      use target_type <- is.bind(infer_expr_inner(tenv, target))
-      use applied_target <- is.bind(type_apply_state(target_type))
-      case applied_target {
-        types.Ttuple(args, _) -> tuple_index_type(args, index, span)
-        types.Tvar(_, _) -> {
-          use args <- is.bind(tuple_index_vars(index + 1, span))
-          let tuple_type = types.Ttuple(args, span)
-          use _ignored <- is.bind(unify(applied_target, tuple_type, span))
-          tuple_index_type(args, index, span)
-        }
-        _ -> is.error("Tuple index on non-tuple", span)
-      }
-    }
-
-    g.List(span, items, tail) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use elem_type <- is.bind(new_type_var("list_item", span))
-      let list_type = types.Tapp(types.Tcon("List", span), [elem_type], span)
-      use item_types <- is.bind(
-        is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
-      )
-      use _ignored <- is.bind(
-        is.each_list(item_types, fn(item_type) {
-          unify(item_type, elem_type, span)
-        }),
-      )
-      case tail {
-        option.None -> type_apply_state(list_type)
-        option.Some(tail_expr) -> {
-          use tail_type <- is.bind(infer_expr_inner(tenv, tail_expr))
-          use _ignored <- is.bind(unify(tail_type, list_type, span))
-          type_apply_state(list_type)
-        }
-      }
-    }
-
-    g.BitString(span, segments) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- is.bind(
-        is.each_list(segments, fn(segment) {
-          let #(expr, _opts) = segment
-          use _ignored2 <- is.bind(infer_expr_inner(tenv, expr))
-          use _ignored3 <- is.bind(infer_bitstring_expr_options(tenv, segment))
-          is.ok(Nil)
-        }),
-      )
-      is.ok(types.Tcon("BitString", span))
-    }
-
-    g.Echo(span, value, message) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use _ignored <- is.bind(case message {
-        option.Some(expr) -> {
-          use msg_type <- is.bind(infer_expr_inner(tenv, expr))
-          use _ignored2 <- is.bind(unify(
-            msg_type,
-            types.Tcon("String", span),
-            span,
-          ))
-          is.ok(Nil)
-        }
-        option.None -> is.ok(Nil)
+    g.NegateBool(span, value) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use value_type <- is.bind(infer_expr_inner(tenv, value))
+        use _ignored <- is.bind(unify(
+          value_type,
+          types.Tcon("Bool", span),
+          span,
+        ))
+        is.ok(types.Tcon("Bool", span))
       })
-      case value {
-        option.Some(expr) -> infer_expr_inner(tenv, expr)
-        option.None -> is.ok(types.Tcon("()", span))
-      }
-    }
 
-    g.RecordUpdate(span, _module, name, record, fields) -> {
-      let _loc = gleam_types.loc_from_span(span)
-      use args2 <- is.bind(instantiate_tcon(tenv, name, span))
-      let #(cfields, cres) = args2
-      use record_type <- is.bind(infer_expr_inner(tenv, record))
-      use applied_record <- is.bind(type_apply_state(record_type))
-      case applied_record {
-        types.Tvar(_, _) -> {
-          use _ignored <- is.bind(unify(record_type, cres, span))
-          type_apply_state(cres)
+    g.Block(span, statements) ->
+      record_expr(span, infer_block(tenv, statements, span))
+
+    g.Panic(span, message) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use _ignored <- is.bind(case message {
+          option.Some(expr) -> {
+            use msg_type <- is.bind(infer_expr_inner(tenv, expr))
+            unify(msg_type, types.Tcon("String", span), span)
+          }
+          option.None -> is.ok(Nil)
+        })
+        new_type_var("panic", span)
+      })
+
+    g.Todo(span, message) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use _ignored <- is.bind(case message {
+          option.Some(expr) -> {
+            use msg_type <- is.bind(infer_expr_inner(tenv, expr))
+            unify(msg_type, types.Tcon("String", span), span)
+          }
+          option.None -> is.ok(Nil)
+        })
+        new_type_var("todo", span)
+      })
+
+    g.Tuple(span, items) ->
+      record_expr(span, {
+        use item_types <- is.bind(
+          is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
+        )
+        is.ok(types.Ttuple(item_types, span))
+      })
+
+    g.TupleIndex(span, target, index) ->
+      record_expr(span, {
+        use target_type <- is.bind(infer_expr_inner(tenv, target))
+        use applied_target <- is.bind(type_apply_state(target_type))
+        case applied_target {
+          types.Ttuple(args, _) -> tuple_index_type(args, index, span)
+          types.Tvar(_, _) -> {
+            use args <- is.bind(tuple_index_vars(index + 1, span))
+            let tuple_type = types.Ttuple(args, span)
+            use _ignored <- is.bind(unify(applied_target, tuple_type, span))
+            tuple_index_type(args, index, span)
+          }
+          _ -> is.error("Tuple index on non-tuple", span)
         }
-        _ -> {
-          use record_tcon <- is.bind(
-            is.from_result(types.tcon_and_args(applied_record, [], span)),
-          )
-          let #(record_tname, record_targs) = record_tcon
-          use constructor_tcon <- is.bind(
-            is.from_result(types.tcon_and_args(cres, [], span)),
-          )
-          let #(constructor_tname, _constructor_targs) = constructor_tcon
-          use _ignored <- is.bind(case record_tname == constructor_tname {
-            True -> is.ok(Nil)
-            False -> is.error("Record update type mismatch", span)
-          })
-          let env.TEnv(
-            _values,
-            tcons,
-            _types,
-            _aliases,
-            _modules,
-            _params,
-            _type_names,
-            _refinements,
-          ) = tenv
-          use constructor_def <- is.bind(case dict.get(tcons, name) {
-            Ok(value) -> is.ok(value)
-            Error(_) -> is.error("Unknown constructor " <> name, span)
-          })
-          let #(free, raw_fields, _cres) = constructor_def
-          let record_subst = dict.from_list(list.zip(free, record_targs))
-          let record_fields =
-            list.map(raw_fields, fn(field) {
-              let #(label, t) = field
-              #(label, types.type_apply(record_subst, t))
+      })
+
+    g.List(span, items, tail) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use elem_type <- is.bind(new_type_var("list_item", span))
+        let list_type = types.Tapp(types.Tcon("List", span), [elem_type], span)
+        use item_types <- is.bind(
+          is.map_list(items, fn(item) { infer_expr_inner(tenv, item) }),
+        )
+        use _ignored <- is.bind(
+          is.each_list(item_types, fn(item_type) {
+            unify(item_type, elem_type, span)
+          }),
+        )
+        case tail {
+          option.None -> type_apply_state(list_type)
+          option.Some(tail_expr) -> {
+            use tail_type <- is.bind(infer_expr_inner(tenv, tail_expr))
+            use _ignored <- is.bind(unify(tail_type, list_type, span))
+            type_apply_state(list_type)
+          }
+        }
+      })
+
+    g.BitString(span, segments) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use _ignored <- is.bind(
+          is.each_list(segments, fn(segment) {
+            let #(expr, _opts) = segment
+            use _ignored2 <- is.bind(infer_expr_inner(tenv, expr))
+            use _ignored3 <- is.bind(infer_bitstring_expr_options(tenv, segment))
+            is.ok(Nil)
+          }),
+        )
+        is.ok(types.Tcon("BitString", span))
+      })
+
+    g.Echo(span, value, message) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use _ignored <- is.bind(case message {
+          option.Some(expr) -> {
+            use msg_type <- is.bind(infer_expr_inner(tenv, expr))
+            use _ignored2 <- is.bind(unify(
+              msg_type,
+              types.Tcon("String", span),
+              span,
+            ))
+            is.ok(Nil)
+          }
+          option.None -> is.ok(Nil)
+        })
+        case value {
+          option.Some(expr) -> infer_expr_inner(tenv, expr)
+          option.None -> is.ok(types.Tcon("()", span))
+        }
+      })
+
+    g.RecordUpdate(span, _module, name, record, fields) ->
+      record_expr(span, {
+        let _loc = gleam_types.loc_from_span(span)
+        use args2 <- is.bind(instantiate_tcon(tenv, name, span))
+        let #(cfields, cres) = args2
+        use record_type <- is.bind(infer_expr_inner(tenv, record))
+        use applied_record <- is.bind(type_apply_state(record_type))
+        case applied_record {
+          types.Tvar(_, _) -> {
+            use _ignored <- is.bind(unify(record_type, cres, span))
+            type_apply_state(cres)
+          }
+          _ -> {
+            use record_tcon <- is.bind(
+              is.from_result(types.tcon_and_args(applied_record, [], span)),
+            )
+            let #(record_tname, record_targs) = record_tcon
+            use constructor_tcon <- is.bind(
+              is.from_result(types.tcon_and_args(cres, [], span)),
+            )
+            let #(constructor_tname, _constructor_targs) = constructor_tcon
+            use _ignored <- is.bind(case record_tname == constructor_tname {
+              True -> is.ok(Nil)
+              False -> is.error("Record update type mismatch", span)
             })
-          let updated_labels =
-            list.map(fields, fn(field) {
-              let g.RecordUpdateField(label, _item) = field
-              label
+            let env.TEnv(
+              _values,
+              tcons,
+              _types,
+              _aliases,
+              _modules,
+              _params,
+              _type_names,
+              _refinements,
+              _hover,
+            ) = tenv
+            use constructor_def <- is.bind(case dict.get(tcons, name) {
+              Ok(value) -> is.ok(value)
+              Error(_) -> is.error("Unknown constructor " <> name, span)
             })
-          use _ignored2 <- is.bind(
-            is.each_list(fields, fn(field) {
-              let g.RecordUpdateField(label, item) = field
-              use ctype <- is.bind(lookup_constructor_field(
-                label,
-                cfields,
-                span,
-              ))
-              let expr = case item {
-                option.Some(expr) -> expr
-                option.None -> g.Variable(span, label)
-              }
-              use expr_type <- is.bind(infer_expr_inner(tenv, expr))
-              unify(expr_type, ctype, span)
-            }),
-          )
-          use _ignored3 <- is.bind(
-            is.each_list(record_fields, fn(field) {
-              let #(maybe_label, record_type) = field
-              case maybe_label {
-                option.None -> is.ok(Nil)
-                option.Some(label) ->
-                  case list.contains(updated_labels, label) {
-                    True -> is.ok(Nil)
-                    False -> {
-                      use ctype <- is.bind(lookup_constructor_field(
-                        label,
-                        cfields,
-                        span,
-                      ))
-                      unify(record_type, ctype, span)
+            let #(free, raw_fields, _cres) = constructor_def
+            let record_subst = dict.from_list(list.zip(free, record_targs))
+            let record_fields =
+              list.map(raw_fields, fn(field) {
+                let #(label, t) = field
+                #(label, types.type_apply(record_subst, t))
+              })
+            let updated_labels =
+              list.map(fields, fn(field) {
+                let g.RecordUpdateField(label, _item) = field
+                label
+              })
+            use _ignored2 <- is.bind(
+              is.each_list(fields, fn(field) {
+                let g.RecordUpdateField(label, item) = field
+                use ctype <- is.bind(lookup_constructor_field(
+                  label,
+                  cfields,
+                  span,
+                ))
+                let expr = case item {
+                  option.Some(expr) -> expr
+                  option.None -> g.Variable(span, label)
+                }
+                use expr_type <- is.bind(infer_expr_inner(tenv, expr))
+                unify(expr_type, ctype, span)
+              }),
+            )
+            use _ignored3 <- is.bind(
+              is.each_list(record_fields, fn(field) {
+                let #(maybe_label, record_type) = field
+                case maybe_label {
+                  option.None -> is.ok(Nil)
+                  option.Some(label) ->
+                    case list.contains(updated_labels, label) {
+                      True -> is.ok(Nil)
+                      False -> {
+                        use ctype <- is.bind(lookup_constructor_field(
+                          label,
+                          cfields,
+                          span,
+                        ))
+                        unify(record_type, ctype, span)
+                      }
                     }
-                  }
-              }
-            }),
-          )
-          type_apply_state(cres)
+                }
+              }),
+            )
+            type_apply_state(cres)
+          }
         }
-      }
-    }
-
-    g.FieldAccess(span, container, label) -> {
-      case container {
-        g.Variable(_span, name) ->
-          case env.resolve_refinement(tenv, name) {
-            Ok(constructor_name) -> {
-              use target_type <- is.bind(infer_expr_inner(tenv, container))
-              use applied_target <- is.bind(type_apply_state(target_type))
-              case applied_target {
-                types.Tvar(_, _) ->
-                  is.error("Record field access requires known type", span)
-                _ ->
-                  field_type_for_constructor(
-                    tenv,
-                    constructor_name,
-                    applied_target,
-                    label,
-                    span,
-                  )
-              }
-            }
-            Error(_) -> {
-              let module_value = case env.resolve_module(tenv, name) {
-                Ok(module_key) ->
-                  case env.resolve(tenv, module_key <> "/" <> label) {
-                    Ok(scheme_) -> option.Some(instantiate(scheme_, span))
-                    Error(_) ->
-                      case module_key == "gleam" {
-                        True ->
-                          case env.resolve(tenv, label) {
-                            Ok(scheme_) ->
-                              option.Some(instantiate(scheme_, span))
-                            Error(_) -> option.None
-                          }
-                        False -> option.None
-                      }
-                  }
-                Error(_) -> option.None
-              }
-              case module_value {
-                option.Some(result) -> result
-                option.None ->
-                  case env.resolve(tenv, name) {
-                    Ok(_) ->
-                      infer_record_field_access(tenv, span, container, label)
-                    Error(_) ->
-                      case env.resolve_module(tenv, name) {
-                        Ok(module_key) ->
-                          is.error(
-                            "Unknown module value "
-                              <> module_key
-                              <> "/"
-                              <> label,
-                            span,
-                          )
-                        Error(_) ->
-                          infer_record_field_access(
-                            tenv,
-                            span,
-                            container,
-                            label,
-                          )
-                      }
-                  }
-              }
-            }
-          }
-        _ -> infer_record_field_access(tenv, span, container, label)
-      }
-    }
-
-    g.Fn(span, params, return_annotation, body) -> {
-      use inferred <- is.bind(
-        is.map_list(params, fn(param) {
-          let g.FnParameter(name, annotation) = param
-          case annotation {
-            option.Some(type_expr) ->
-              case gleam_types.type_(tenv, type_expr) {
-                Ok(type_) -> is.ok(#(type_, bound_for_name(name, type_)))
-                Error(_) -> is.error("Unsupported type annotation", span)
-              }
-            option.None -> {
-              let param_name = case name {
-                g.Named(name) -> name
-                g.Discarded(_) -> "arg"
-              }
-              use arg_type <- is.bind(new_type_var(param_name, span))
-              is.ok(#(arg_type, bound_for_name(name, arg_type)))
-            }
-          }
-        }),
-      )
-      let #(arg_types, scopes) = list.unzip(inferred)
-      let scope =
-        list.fold(scopes, dict.new(), fn(acc, scope) { dict.merge(acc, scope) })
-      use scope_applied <- is.bind(scope_apply_state(scope))
-      let bound_env = env.with_scope(tenv, scope_applied)
-      use body_type <- is.bind(infer_block(bound_env, body, span))
-      use _ignored <- is.bind(case return_annotation {
-        option.Some(type_expr) ->
-          case gleam_types.type_(tenv, type_expr) {
-            Ok(type_) -> unify(body_type, type_, span)
-            Error(gleam_types.Unsupported(name)) ->
-              is.error("Unsupported return annotation: " <> name, span)
-          }
-        option.None -> is.ok(Nil)
       })
-      use args_applied <- is.bind(
-        is.map_list(arg_types, fn(arg) { type_apply_state(arg) }),
-      )
-      is.ok(types.Tfn(args_applied, body_type, span))
-    }
+
+    g.FieldAccess(span, container, label) ->
+      record_expr(span, {
+        case container {
+          g.Variable(_span, name) ->
+            case env.resolve_refinement(tenv, name) {
+              Ok(constructor_name) -> {
+                use target_type <- is.bind(infer_expr_inner(tenv, container))
+                use applied_target <- is.bind(type_apply_state(target_type))
+                case applied_target {
+                  types.Tvar(_, _) ->
+                    is.error("Record field access requires known type", span)
+                  _ ->
+                    field_type_for_constructor(
+                      tenv,
+                      constructor_name,
+                      applied_target,
+                      label,
+                      span,
+                    )
+                }
+              }
+              Error(_) -> {
+                let module_value = case env.resolve_module(tenv, name) {
+                  Ok(module_key) ->
+                    case env.resolve(tenv, module_key <> "/" <> label) {
+                      Ok(scheme_) -> option.Some(instantiate(scheme_, span))
+                      Error(_) ->
+                        case module_key == "gleam" {
+                          True ->
+                            case env.resolve(tenv, label) {
+                              Ok(scheme_) ->
+                                option.Some(instantiate(scheme_, span))
+                              Error(_) -> option.None
+                            }
+                          False -> option.None
+                        }
+                    }
+                  Error(_) -> option.None
+                }
+                case module_value {
+                  option.Some(result) -> result
+                  option.None ->
+                    case env.resolve(tenv, name) {
+                      Ok(_) ->
+                        infer_record_field_access(tenv, span, container, label)
+                      Error(_) ->
+                        case env.resolve_module(tenv, name) {
+                          Ok(module_key) ->
+                            is.error(
+                              "Unknown module value "
+                                <> module_key
+                                <> "/"
+                                <> label,
+                              span,
+                            )
+                          Error(_) ->
+                            infer_record_field_access(
+                              tenv,
+                              span,
+                              container,
+                              label,
+                            )
+                        }
+                    }
+                }
+              }
+            }
+          _ -> infer_record_field_access(tenv, span, container, label)
+        }
+      })
+
+    g.Fn(span, params, return_annotation, body) ->
+      record_expr(span, {
+        use inferred <- is.bind(
+          is.map_list(params, fn(param) {
+            let g.FnParameter(name, annotation) = param
+            case annotation {
+              option.Some(type_expr) ->
+                case gleam_types.type_(tenv, type_expr) {
+                  Ok(type_) -> is.ok(#(type_, bound_for_name(name, type_)))
+                  Error(_) -> is.error("Unsupported type annotation", span)
+                }
+              option.None -> {
+                let param_name = case name {
+                  g.Named(name) -> name
+                  g.Discarded(_) -> "arg"
+                }
+                use arg_type <- is.bind(new_type_var(param_name, span))
+                is.ok(#(arg_type, bound_for_name(name, arg_type)))
+              }
+            }
+          }),
+        )
+        let #(arg_types, scopes) = list.unzip(inferred)
+        let scope =
+          list.fold(scopes, dict.new(), fn(acc, scope) {
+            dict.merge(acc, scope)
+          })
+        use scope_applied <- is.bind(scope_apply_state(scope))
+        let bound_env = env.with_scope(tenv, scope_applied)
+        use body_type <- is.bind(infer_block(bound_env, body, span))
+        use _ignored <- is.bind(case return_annotation {
+          option.Some(type_expr) ->
+            case gleam_types.type_(tenv, type_expr) {
+              Ok(type_) -> unify(body_type, type_, span)
+              Error(gleam_types.Unsupported(name)) ->
+                is.error("Unsupported return annotation: " <> name, span)
+            }
+          option.None -> is.ok(Nil)
+        })
+        use args_applied <- is.bind(
+          is.map_list(arg_types, fn(arg) { type_apply_state(arg) }),
+        )
+        is.ok(types.Tfn(args_applied, body_type, span))
+      })
 
     g.Call(span, function, arguments) ->
-      infer_call(tenv, span, function, arguments)
+      record_expr(span, infer_call(tenv, span, function, arguments))
 
     g.FnCapture(span, label, function, args_before, args_after) ->
-      infer_fn_capture(tenv, span, label, function, args_before, args_after)
+      record_expr(
+        span,
+        infer_fn_capture(tenv, span, label, function, args_before, args_after),
+      )
 
-    g.Case(span, subjects, clauses) -> infer_case(tenv, span, subjects, clauses)
+    g.Case(span, subjects, clauses) ->
+      record_expr(span, infer_case(tenv, span, subjects, clauses))
 
     g.BinaryOperator(span, op, left, right) ->
-      infer_binary_operator(tenv, span, op, left, right)
+      record_expr(span, infer_binary_operator(tenv, span, op, left, right))
   }
 }
 
@@ -933,6 +971,7 @@ fn constructor_name(
         _params,
         _type_names,
         _refinements,
+        _hover,
       ) = tenv
       case dict.get(tcons, name) {
         Ok(_) -> option.Some(name)
@@ -2014,6 +2053,7 @@ pub fn instantiate_tcon(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   case dict.get(tcons, name) {
     Error(_) -> is.error("Unknown type constructor: " <> name, span)
@@ -2373,6 +2413,7 @@ fn field_type_for_any_constructor_label(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   use field_type <- is.bind(new_type_var("record_field", span))
   use matched <- is.bind(
@@ -2419,6 +2460,7 @@ fn field_type_for_record_access(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   case dict.get(types_map, tname) {
     Error(_) -> is.error("Unknown type name " <> tname, span)
@@ -2482,6 +2524,7 @@ fn field_type_for_constructor(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   case dict.get(types_map, tname) {
     Error(_) -> is.error("Unknown type name " <> tname, span)
@@ -2547,6 +2590,7 @@ fn unique_constructor_for_label(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   let matches =
     list.fold(dict.to_list(tcons), [], fn(acc, pair) {

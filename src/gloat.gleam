@@ -38,7 +38,7 @@ pub fn add_module(
   tenv: env.TEnv,
   module: g.Module,
 ) -> Result(env.TEnv, type_error.TypeError) {
-  builtins.add_module(tenv, module)
+  builtins.add_module(tenv, module, "")
 }
 
 pub fn resolve(tenv: env.TEnv, name: String) -> option.Option(Scheme) {
@@ -52,10 +52,12 @@ pub fn add_module_with_target(
   tenv: env.TEnv,
   module: g.Module,
   target: String,
+  module_key: String,
 ) -> Result(env.TEnv, type_error.TypeError) {
   builtins.add_module(
     tenv,
     gloat_glance.filter_module_for_target(module, target),
+    module_key,
   )
 }
 
