@@ -1,4 +1,6 @@
 import { basicSetup, EditorView } from "https://esm.sh/codemirror@6.0.2";
+import { StateEffect, StateField } from "https://esm.sh/@codemirror/state@6.4.1";
+import { Decoration } from "https://esm.sh/@codemirror/view@6.26.2";
 import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
 import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
 import stdlib from "../stdlib.js";
@@ -36,11 +38,34 @@ let lastGoodEnv = null;
 let lastSource = sample;
 let hoverTimer = null;
 let typecheckTimer = null;
+let lastHoverRange = null;
+
+const setHoverEffect = StateEffect.define();
+const hoverField = StateField.define({
+    create() {
+        return Decoration.none;
+    },
+    update(value, tr) {
+        let next = value.map(tr.changes);
+        for (const effect of tr.effects) {
+            if (effect.is(setHoverEffect)) {
+                if (!effect.value) {
+                    return Decoration.none;
+                }
+                const { from, to } = effect.value;
+                return Decoration.set([Decoration.mark({ class: "cm-hover-highlight" }).range(from, to)]);
+            }
+        }
+        return next;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+});
 
 const view = new EditorView({
     doc: sample,
     extensions: [
         basicSetup,
+        hoverField,
         EditorView.updateListener.of((update) => {
             if (update.docChanged) scheduleTypecheck();
         }),
@@ -138,6 +163,7 @@ function handleHover(event, view) {
         }
 
         const types = [];
+        let highlightSpan = null;
         for (const match of matches) {
             for (const type of match.types) {
                 const typeString = type;
@@ -145,7 +171,10 @@ function handleHover(event, view) {
                     types.push(typeString);
                 }
             }
-            if (types.length) {
+            if (types.length && !highlightSpan) {
+                highlightSpan = match;
+            }
+            if (types.length && highlightSpan) {
                 break;
             }
         }
@@ -161,6 +190,7 @@ function handleHover(event, view) {
             return;
         }
 
+        highlightRange(view, highlightSpan);
         hoverEl.textContent = types.join("\n");
         hoverEl.style.left = `${coords.left + 12}px`;
         hoverEl.style.top = `${coords.bottom + 12}px`;
@@ -169,11 +199,48 @@ function handleHover(event, view) {
 }
 
 function hideHover() {
+    highlightRange(view, null);
     hoverEl.classList.add("hidden");
 }
 
 function byteOffsetAtPos(source, pos) {
     return encoder.encode(source.slice(0, pos)).length;
+}
+
+function posFromByteOffset(source, byteOffset) {
+    if (byteOffset <= 0) {
+        return 0;
+    }
+    let lo = 0;
+    let hi = source.length;
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const midBytes = encoder.encode(source.slice(0, mid)).length;
+        if (midBytes < byteOffset) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+function highlightRange(view, span) {
+    if (!span) {
+        if (lastHoverRange !== null) {
+            lastHoverRange = null;
+            view.dispatch({ effects: setHoverEffect.of(null) });
+        }
+        return;
+    }
+    const source = view.state.doc.toString();
+    const from = posFromByteOffset(source, span.start);
+    const to = posFromByteOffset(source, span.end);
+    if (lastHoverRange && lastHoverRange.from === from && lastHoverRange.to === to) {
+        return;
+    }
+    lastHoverRange = { from, to };
+    view.dispatch({ effects: setHoverEffect.of({ from, to }) });
 }
 
 function setStatus(text) {
