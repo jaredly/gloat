@@ -6,3 +6,4 @@ erl_crash.dump
 glance
 example-files/gleam
 example-files/stdlib
+stdlib.js

@@ -18,20 +18,20 @@ pub fn analyze(
   src: String,
   target: String,
   module_key: String,
-) -> Result(List(HoverEntry), AnalysisError) {
+  tenv: gloat.TEnv,
+) -> Result(gloat.TEnv, AnalysisError) {
   case g.module(src) {
     Error(err) -> Error(ParseError(format_parse_error(err)))
     Ok(parsed) -> {
-      let tenv = gloat.builtin_env()
       case gloat.add_module_with_target(tenv, parsed, target, module_key) {
         Error(err) -> Error(to_type_error(err))
-        Ok(env_) -> Ok(hover_entries(env_, module_key))
+        Ok(env_) -> Ok(env_)
       }
     }
   }
 }
 
-fn hover_entries(env_: env.TEnv, module_key: String) -> List(HoverEntry) {
+pub fn hover_entries(env_: env.TEnv, module_key: String) -> List(HoverEntry) {
   case env.hover_for_module(env_, module_key) {
     Error(_) -> []
     Ok(hover_map) ->

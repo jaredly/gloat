@@ -2,10 +2,12 @@ import { basicSetup, EditorView } from "https://esm.sh/codemirror@6.0.2";
 import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
 import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
 import stdlib from "../stdlib.js";
-console.log(stdlib);
 
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
+import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
+
+const tenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
 
 const MODULE_KEY = "repl";
 const encoder = new TextEncoder();
@@ -73,7 +75,9 @@ function runTypecheck() {
     const source = view.state.doc.toString();
     lastSource = source;
     const target = targetSelect.value;
-    const result = gloatWeb.analyze(source, target, MODULE_KEY);
+    console.log("tenv", tenv);
+    const result = gloatWeb.analyze(source, target, MODULE_KEY, tenv);
+    console.log(result);
 
     if (result instanceof ResultError) {
         lastGoodEnv = null;
@@ -93,7 +97,10 @@ function runTypecheck() {
         return;
     }
 
-    lastGoodEnv = result[0];
+    const nenv = result[0];
+    const hovers = gloatWeb.hover_entries(nenv, MODULE_KEY);
+
+    lastGoodEnv = hovers;
     hoverIndex = buildHoverIndex(lastGoodEnv);
     setStatus("Typecheck OK");
     detailsEl.textContent = `Hover over expressions to see types. (${hoverIndex.length} spans)`;
