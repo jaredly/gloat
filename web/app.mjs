@@ -7,7 +7,10 @@ import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
+import { parseErlangConfig } from "./erlang_source_parser.mjs";
 // import stdlib from "../stdlib.js";
+// import { Erlang } from "./erlang.mjs";
+// import { Buffer } from "https://esm.sh/buffer";
 
 const baseTenv = gloat.builtin_env();
 // const baseTenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
@@ -222,6 +225,13 @@ async function fetchPackageSources(name, version) {
     const mainEntries = await mainTar(name, resolved);
     const contents = mainEntries.find((e) => e.name === "contents.tar.gz");
     if (!contents) throw new Error(`no contents.tar.gz`);
+    const config = mainEntries.find((e) => e.name === "metadata.config");
+    if (!config) throw new Error(`no contents.tar.gz`);
+    // const gotit = await new Promise((res) => Erlang.binary_to_term(new Buffer(config.data), res));
+    const dec = new TextDecoder();
+    const configText = dec.decode(config.data);
+    console.log(configText);
+    console.log("parsed", parseErlangConfig(configText));
     const contentsEntries = extractTarGz(contents.data);
 
     return contentsEntries
