@@ -164,7 +164,11 @@ async function loadPackages() {
     try {
         const entries = [];
         for (const spec of specs) {
-            const sources = await fetchPackageSources(spec.name, spec.version);
+            const { sources, requirements } = await fetchPackageSources(spec.name, spec.version);
+            // requirements is a map that looks like
+            // {[package_name: string]: {app: string, optional: boolean, requirement: string}}
+            // and requirement can look like  ">= 0.43.0 and < 1.0.0"
+            // or it could be a single version
             entries.push(...sources);
         }
         packageSources = entries;
@@ -219,7 +223,6 @@ const extractTarGz = (buffer) => {
 };
 
 async function fetchPackageSources(name, version) {
-    console.log("fetching", name);
     const resolved = version || (await fetchLatestVersion(name));
     const decoder = new TextDecoder();
     const mainEntries = await mainTar(name, resolved);
@@ -230,11 +233,10 @@ async function fetchPackageSources(name, version) {
     // const gotit = await new Promise((res) => Erlang.binary_to_term(new Buffer(config.data), res));
     const dec = new TextDecoder();
     const configText = dec.decode(config.data);
-    console.log(configText);
-    console.log("parsed", parseErlangConfig(configText));
+    const parsedConfig = parseErlangConfig(configText);
     const contentsEntries = extractTarGz(contents.data);
 
-    return contentsEntries
+    const sources = contentsEntries
         .map((entry) => {
             // console.log("contents entry", entry);
             const moduleName = moduleFromPath(entry.name);
@@ -247,6 +249,7 @@ async function fetchPackageSources(name, version) {
             };
         })
         .filter(Boolean);
+    return { sources, requirements: parsedConfig.requirements };
 }
 
 async function fetchLatestVersion(name) {
