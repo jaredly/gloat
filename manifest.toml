@@ -7,7 +7,7 @@ packages = [
   { name = "gleam_stdlib", version = "0.68.1", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "F7FAEBD8EF260664E86A46C8DBA23508D1D11BB3BCC6EE1B89B3BC3E5C83FF1E" },
   { name = "gleeunit", version = "1.9.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "DA9553CE58B67924B3C631F96FE3370C49EB6D6DC6B384EC4862CC4AAA718F3C" },
   { name = "glexer", version = "2.3.1", build_tools = ["gleam"], requirements = ["gleam_stdlib", "splitter"], otp_app = "glexer", source = "hex", outer_checksum = "41D8D2E855AEA87ADC94B7AF26A5FEA3C90268D4CF2CCBBD64FD6863714EE085" },
-  { name = "pubgrub", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "git", repo = "https://github.com/jaredly/pubgrub.git", commit = "a1ea943f0f83673eeba3cecac2beba0a5be62450" },
+  { name = "pubgrub", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../fork/pubgrub" },
   { name = "splitter", version = "1.2.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "splitter", source = "hex", outer_checksum = "3DFD6B6C49E61EDAF6F7B27A42054A17CFF6CA2135FF553D0CB61C234D281DD0" },
 ]
 
@@ -17,4 +17,4 @@ gleam_json = { version = ">= 3.1.0 and < 4.0.0" }
 gleam_stdlib = { version = ">= 0.44.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 glexer = { version = ">= 2.3.1 and < 3.0.0" }
-pubgrub = { git = "https://github.com/jaredly/pubgrub.git", ref = "a1ea943" }
+pubgrub = { path = "../../fork/pubgrub" }

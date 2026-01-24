@@ -13,7 +13,7 @@ import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
 import * as pubgrub from "../build/dev/javascript/pubgrub/pubgrub.mjs";
 import * as pubgrubReport from "../build/dev/javascript/pubgrub/pubgrub/report.mjs";
 import * as pubgrubVersion from "../build/dev/javascript/pubgrub/pubgrub/version.mjs";
-import * as pubgrubRanges from "../build/dev/javascript/pubgrub/version_ranges.mjs";
+import * as pubgrubRanges from "../build/dev/javascript/pubgrub/pubgrub/version_ranges.mjs";
 // import stdlib from "../stdlib.js";
 // import { Erlang } from "./erlang.mjs";
 // import { Buffer } from "https://esm.sh/buffer";
@@ -44,6 +44,9 @@ const resetButton = document.getElementById("reset");
 const packagesInput = document.getElementById("packages");
 const loadPackagesButton = document.getElementById("load-packages");
 const packagesStatus = document.getElementById("packages-status");
+const packagesDetails = document.getElementById("packages-details");
+const packagesListEl = document.getElementById("packages-list");
+const modulesListEl = document.getElementById("modules-list");
 
 const sample = `import gleam/int
 import gleam/list
@@ -174,6 +177,7 @@ async function loadPackages() {
     const specs = parsePackageSpecs(packagesInput.value);
     if (!specs.length) {
         setPackagesStatus("No packages specified.");
+        updateLoadedDetails([], []);
         return;
     }
     try {
@@ -186,6 +190,7 @@ async function loadPackages() {
             entries.push(...sources);
         }
         packageSources = entries;
+        updateLoadedDetails(resolved, entries);
         setPackagesStatus(`Loaded ${entries.length} modules.`);
         await rebuildPackageEnv();
         scheduleTypecheck();
@@ -220,7 +225,7 @@ function parsePackageSpecs(input) {
 }
 
 async function resolvePackageVersions(specs) {
-    const rootPackage = "__root__";
+    const rootPackage = "(root)";
     const rootVersion = [0, 0, 0];
     const compare = pubgrubVersion.compare;
     const normalized = await normalizePackageSpecs(specs);
@@ -229,9 +234,8 @@ async function resolvePackageVersions(specs) {
     if (resolved instanceof GleamError) {
         const err = resolved[0];
         if (err instanceof pubgrub.NoSolution) {
-            const tree = pubgrubReport.collapse_no_versions(err[0]);
             const formatter = pubgrubReport.default_report_formatter((pkg) => pkg, pubgrubVersion.to_string);
-            const message = pubgrubReport.report(tree, formatter);
+            const message = pubgrubReport.report(err[0], formatter);
             throw new Error(`No solution: ${message}`);
         }
         throw new Error(`Dependency resolution failed: ${err.constructor?.name ?? err}`);
@@ -423,6 +427,26 @@ function parseVersion(raw) {
     const minor = Number(match[2] || 0);
     const patch = Number(match[3] || 0);
     return { value: [major, minor, patch], segments };
+}
+
+function updateLoadedDetails(resolved, sources) {
+    if (!packagesDetails || !packagesListEl || !modulesListEl) {
+        return;
+    }
+    const packages = resolved.map((entry) => `${entry.name}@${entry.version}`).sort((a, b) => a.localeCompare(b));
+    const modules = Array.from(new Set(sources.map((entry) => entry.module))).sort((a, b) => a.localeCompare(b));
+    const summary = packagesDetails.querySelector("summary");
+    if (summary) {
+        summary.textContent = `Loaded packages & modules (${packages.length} packages, ${modules.length} modules)`;
+    }
+    packagesListEl.replaceChildren(...packages.map((label) => toListItem(label)));
+    modulesListEl.replaceChildren(...modules.map((label) => toListItem(label)));
+}
+
+function toListItem(label) {
+    const li = document.createElement("li");
+    li.textContent = label;
+    return li;
 }
 
 const mainTar = async (name, resolved) => {
