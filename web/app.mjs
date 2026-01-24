@@ -645,6 +645,7 @@ function setPackagesStatus(message) {
 
 function handleHover(event, view) {
     if (!hoverIndex.length) {
+        clearTimeout(hoverTimer);
         return;
     }
     if (hoverTimer) {
@@ -708,6 +709,7 @@ function handleHover(event, view) {
 }
 
 function hideHover() {
+    clearTimeout(hoverTimer);
     highlightRange(view, null);
     hoverEl.classList.add("hidden");
 }
