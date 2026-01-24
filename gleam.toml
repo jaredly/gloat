@@ -18,6 +18,7 @@ gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 glexer = { git = "https://github.com/jaredly/glexer.git", ref = "b7d6922" }
 glance = ">= 6.0.0 and < 7.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
+pubgrub = {git = "https://github.com/jaredly/pubgrub.git", ref = "a1ea943"}
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
