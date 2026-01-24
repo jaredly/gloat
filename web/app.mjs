@@ -293,9 +293,13 @@ async function buildDependencyGraph(specs, rootPins) {
         seen.add(name);
         const versions = rootPins?.has(name) ? [rootPins.get(name)] : await fetchPackageVersions(name);
         versionsByPackage.set(name, versions);
-        for (const version of versions) {
-            const requirements = await fetchPackageRequirements(name, version);
-            const deps = requirementsToDeps(requirements);
+        const requirementEntries = await Promise.all(
+            versions.map(async (version) => {
+                const requirements = await fetchPackageRequirements(name, version);
+                return [version, requirementsToDeps(requirements)];
+            }),
+        );
+        for (const [version, deps] of requirementEntries) {
             depsByPackageVersion.set(`${name}@${version}`, deps);
             for (const [depName] of deps) {
                 if (!seen.has(depName)) {
