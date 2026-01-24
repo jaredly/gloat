@@ -82,6 +82,18 @@ pub fn run_empty(st: InferState(a)) -> Result(a, type_error.TypeError) {
   state.run_empty(st)
 }
 
+pub fn run_empty_with_hover(
+  st: InferState(a),
+) -> #(Result(a, type_error.TypeError), dict.Dict(types.Span, List(types.Type))) {
+  let #(data, result) = state.run(st, #(0, dict.new(), dict.new()))
+  let #(_idx, _subst, hover) = data
+  #(result, hover)
+}
+
+pub fn add_hover(span: types.Span, type_: types.Type) -> InferState(Nil) {
+  lift(state.add_hover(span, type_))
+}
+
 pub fn apply_with(
   f: fn(dict.Dict(String, types.Type), a) -> b,
   arg: a,

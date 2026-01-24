@@ -19,8 +19,8 @@ import gloat/types
 
 pub fn main() {
   case parse_args(start_arguments()) {
-    Ok(#(path, lib_dirs, target)) -> {
-      infer_file(path, lib_dirs, target)
+    Ok(#(path, lib_dirs, target, export_path)) -> {
+      infer_file(path, lib_dirs, target, export_path)
     }
     Error(message) -> {
       io.println_error(message)
@@ -31,13 +31,18 @@ pub fn main() {
 
 fn usage() {
   io.println_error(
-    "Usage: gloat_cli <file.gleam> [--target <erlang|javascript>] [<lib_dir> ...]",
+    "Usage: gloat_cli <file.gleam> [--target <erlang|javascript>] [--export-tenv <path>] [<lib_dir> ...]",
   )
 }
 
-fn infer_file(path: String, lib_dirs: List(String), target: String) {
+fn infer_file(
+  path: String,
+  lib_dirs: List(String),
+  target: String,
+  export_path: option.Option(String),
+) {
   case read_file_text(path) {
-    Ok(src) -> infer_source(src, path, lib_dirs, target)
+    Ok(src) -> infer_source(src, path, lib_dirs, target, export_path)
     Error(message) -> io.println_error("Failed to read file: " <> message)
   }
 }
@@ -47,6 +52,7 @@ fn infer_source(
   path: String,
   lib_dirs: List(String),
   target: String,
+  export_path: option.Option(String),
 ) {
   case glance.module(src) {
     Error(error) -> io.println_error(format_parse_error(path, src, error))
@@ -88,10 +94,13 @@ fn infer_source(
           case load_imports(env_, imports, search_dirs, set.new(), target) {
             Error(message) -> io.println_error(message)
             Ok(#(env_loaded, _visited)) -> {
-              case gloat.add_module_with_target(env_loaded, parsed, target) {
+              case
+                gloat.add_module_with_target(env_loaded, parsed, target, path)
+              {
                 Error(err) ->
                   io.println_error(format_type_error(path, src, err))
                 Ok(env_final) -> {
+                  export_tenv_if_requested(env_final, export_path)
                   let inferred =
                     result.all(
                       list.map(names, fn(name) {
@@ -121,15 +130,33 @@ fn infer_source(
   }
 }
 
+fn export_tenv_if_requested(tenv: env.TEnv, export_path: option.Option(String)) {
+  case export_path {
+    option.None -> Nil
+    option.Some(path) -> {
+      let json = gloat.tenv_to_json(tenv)
+      let payload = case string.ends_with(path, ".js") {
+        True -> "export default " <> json
+        False -> json
+      }
+      case write_file_text(path, payload) {
+        Ok(_) -> io.println("Wrote TEnv JSON to " <> path)
+        Error(message) ->
+          io.println_error("Failed to write TEnv JSON: " <> message)
+      }
+    }
+  }
+}
+
 fn parse_args(
   args: List(String),
-) -> Result(#(String, List(String), String), String) {
+) -> Result(#(String, List(String), String, option.Option(String)), String) {
   case args {
     [] -> Error("Missing file path.")
     [path, ..rest] ->
-      result.map(parse_lib_dirs(rest, [], "erlang"), fn(parsed) {
-        let #(dirs, target) = parsed
-        #(path, dirs, target)
+      result.map(parse_lib_dirs(rest, [], "erlang", option.None), fn(parsed) {
+        let #(dirs, target, export_path) = parsed
+        #(path, dirs, target, export_path)
       })
   }
 }
@@ -138,16 +165,24 @@ fn parse_lib_dirs(
   args: List(String),
   acc: List(String),
   target: String,
-) -> Result(#(List(String), String), String) {
+  export_path: option.Option(String),
+) -> Result(#(List(String), String, option.Option(String)), String) {
   case args {
-    [] -> Ok(#(list.reverse(acc), target))
-    ["--target", target_name, ..rest] -> parse_lib_dirs(rest, acc, target_name)
-    ["-t", target_name, ..rest] -> parse_lib_dirs(rest, acc, target_name)
-    ["--lib", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
-    ["-I", dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
+    [] -> Ok(#(list.reverse(acc), target, export_path))
+    ["--target", target_name, ..rest] ->
+      parse_lib_dirs(rest, acc, target_name, export_path)
+    ["-t", target_name, ..rest] ->
+      parse_lib_dirs(rest, acc, target_name, export_path)
+    ["--export-tenv", path, ..rest] ->
+      parse_lib_dirs(rest, acc, target, option.Some(path))
+    ["--lib", dir, ..rest] ->
+      parse_lib_dirs(rest, [dir, ..acc], target, export_path)
+    ["-I", dir, ..rest] ->
+      parse_lib_dirs(rest, [dir, ..acc], target, export_path)
     ["--lib"] -> Error("Missing directory after --lib")
     ["-I"] -> Error("Missing directory after -I")
-    [dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target)
+    ["--export-tenv"] -> Error("Missing path after --export-tenv")
+    [dir, ..rest] -> parse_lib_dirs(rest, [dir, ..acc], target, export_path)
   }
 }
 
@@ -201,7 +236,12 @@ fn load_module(
                 let #(env_loaded, visited_loaded) = loaded
                 result.try(
                   result.map_error(
-                    gloat.add_module_with_target(env_loaded, parsed, target),
+                    gloat.add_module_with_target(
+                      env_loaded,
+                      parsed,
+                      target,
+                      module_name,
+                    ),
                     fn(err) { format_type_error(path, src, err) },
                   ),
                   fn(module_env) {
@@ -234,6 +274,10 @@ fn module_exports_env(
   let type_names = module_type_names(parsed)
   let alias_names = module_alias_names(parsed)
   let type_name_map = type_name_map(module_key, type_names, alias_names)
+  let hover = case env.hover_for_module(module_env, module_name) {
+    Ok(map) -> dict.from_list([#(module_name, map)])
+    Error(_) -> dict.new()
+  }
   result.try(
     qualified_values(module_env, module_key, exported, type_name_map),
     fn(values) {
@@ -246,6 +290,7 @@ fn module_exports_env(
         _params,
         _type_names,
         _refinements,
+        _hover,
       ) = module_env
       let tcons_filtered =
         filter_dict(tcons, constructor_names)
@@ -266,6 +311,7 @@ fn module_exports_env(
         params,
         dict.new(),
         dict.new(),
+        hover,
       ))
     },
   )
@@ -681,6 +727,10 @@ fn charlist_to_string(a: Charlist) -> String
 @external(javascript, "./gloat_cli_ffi.mjs", "read_file")
 fn read_file(path: String) -> Result(BitArray, dynamic.Dynamic)
 
+@external(erlang, "gloat_cli_ffi", "write_file")
+@external(javascript, "./gloat_cli_ffi.mjs", "write_file")
+fn write_file(path: String, data: BitArray) -> Result(Nil, dynamic.Dynamic)
+
 fn read_file_text(path: String) -> Result(String, String) {
   case read_file(path) {
     Ok(bits) ->
@@ -688,6 +738,14 @@ fn read_file_text(path: String) -> Result(String, String) {
         Ok(text) -> Ok(text)
         Error(_) -> Error("file is not valid UTF-8")
       }
+    Error(error) -> Error(string.inspect(error))
+  }
+}
+
+fn write_file_text(path: String, text: String) -> Result(Nil, String) {
+  let data = bit_array.from_string(text)
+  case write_file(path, data) {
+    Ok(_) -> Ok(Nil)
     Error(error) -> Error(string.inspect(error))
   }
 }

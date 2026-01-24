@@ -16,36 +16,60 @@ import gloat/types
 pub fn add_def(
   tenv: env.TEnv,
   name: String,
-  _name_loc: g.Span,
+  name_loc: g.Span,
   expr: g.Expression,
   annotation: option.Option(g.Type),
   loc: g.Span,
   params: List(option.Option(String)),
 ) -> Result(env.TEnv, type_error.TypeError) {
-  is.run_empty({
-    use self <- is.bind(infer.new_type_var(name, types.unknown_span))
-    let bound_env =
-      tenv
-      |> env.with_type(name, scheme.Forall(set.new(), self))
-      |> env.with_type_params(name, params)
-    use type_ <- is.bind(infer.infer_expr(bound_env, expr))
-    use _ignored_annotation <- is.bind(case annotation {
-      option.Some(type_expr) ->
-        case gleam_types.type_(tenv, type_expr) {
-          Ok(annot_type) -> infer.unify(type_, annot_type, loc)
-          Error(_) -> is.error("Unsupported annotation", loc)
-        }
-      option.None -> is.ok(Nil)
+  result.map(
+    add_def_with_hover(tenv, name, name_loc, expr, annotation, loc, params),
+    fn(result) {
+      let #(env_, _hover) = result
+      env_
+    },
+  )
+}
+
+pub fn add_def_with_hover(
+  tenv: env.TEnv,
+  name: String,
+  name_loc: g.Span,
+  expr: g.Expression,
+  annotation: option.Option(g.Type),
+  loc: g.Span,
+  params: List(option.Option(String)),
+) -> Result(#(env.TEnv, env.HoverMap), type_error.TypeError) {
+  let _ = name_loc
+  let #(res, hover) =
+    is.run_empty_with_hover({
+      use self <- is.bind(infer.new_type_var(name, types.unknown_span))
+      let bound_env =
+        tenv
+        |> env.with_type(name, scheme.Forall(set.new(), self))
+        |> env.with_type_params(name, params)
+      use type_ <- is.bind(infer.infer_expr(bound_env, expr))
+      use _ignored_annotation <- is.bind(case annotation {
+        option.Some(type_expr) ->
+          case gleam_types.type_(tenv, type_expr) {
+            Ok(annot_type) -> infer.unify(type_, annot_type, loc)
+            Error(_) -> is.error("Unsupported annotation", loc)
+          }
+        option.None -> is.ok(Nil)
+      })
+      use self_applied <- is.bind(is.apply_with(types.type_apply, self))
+      use _ignored <- is.bind(infer.unify(self_applied, type_, loc))
+      use type_applied <- is.bind(is.apply_with(types.type_apply, type_))
+      is.ok(
+        env.empty()
+        |> env.with_type(name, env.generalize(tenv, type_applied))
+        |> env.with_type_params(name, params),
+      )
     })
-    use self_applied <- is.bind(is.apply_with(types.type_apply, self))
-    use _ignored <- is.bind(infer.unify(self_applied, type_, loc))
-    use type_applied <- is.bind(is.apply_with(types.type_apply, type_))
-    is.ok(
-      env.empty()
-      |> env.with_type(name, env.generalize(tenv, type_applied))
-      |> env.with_type_params(name, params),
-    )
-  })
+  case res {
+    Ok(env_) -> Ok(#(env_, hover))
+    Error(err) -> Error(err)
+  }
 }
 
 pub fn add_defs(
@@ -61,6 +85,25 @@ pub fn add_defs(
     ),
   ),
 ) -> Result(env.TEnv, type_error.TypeError) {
+  result.map(add_defs_with_hover(tenv, defns), fn(result) {
+    let #(env_, _hover) = result
+    env_
+  })
+}
+
+pub fn add_defs_with_hover(
+  tenv: env.TEnv,
+  defns: List(
+    #(
+      String,
+      g.Span,
+      g.Expression,
+      option.Option(g.Type),
+      g.Span,
+      List(option.Option(String)),
+    ),
+  ),
+) -> Result(#(env.TEnv, env.HoverMap), type_error.TypeError) {
   let names =
     list.map(defns, fn(args) {
       let #(name, _, _, _, _, _) = args
@@ -82,69 +125,74 @@ pub fn add_defs(
       params
     })
 
-  is.run_empty({
-    use vbls <- is.bind(
-      is.map_list(defns, fn(args) {
-        let #(name, _name_loc, _expr, _annotation, _loc, _params) = args
-        infer.new_type_var(name, types.unknown_span)
-      }),
-    )
-    let bound_env =
-      list.fold(
-        list.zip(names, list.zip(vbls, params_list)),
-        tenv,
-        fn(acc, args) {
-          let #(name, #(vbl, params)) = args
-          acc
-          |> env.with_type(name, scheme.Forall(set.new(), vbl))
-          |> env.with_type_params(name, params)
-        },
+  let #(res, hover) =
+    is.run_empty_with_hover({
+      use vbls <- is.bind(
+        is.map_list(defns, fn(args) {
+          let #(name, _name_loc, _expr, _annotation, _loc, _params) = args
+          infer.new_type_var(name, types.unknown_span)
+        }),
       )
+      let bound_env =
+        list.fold(
+          list.zip(names, list.zip(vbls, params_list)),
+          tenv,
+          fn(acc, args) {
+            let #(name, #(vbl, params)) = args
+            acc
+            |> env.with_type(name, scheme.Forall(set.new(), vbl))
+            |> env.with_type_params(name, params)
+          },
+        )
 
-    use types_ <- is.bind(
-      is.map_list(defns, fn(args) {
-        let #(_, _, expr, _, _, _) = args
-        infer.infer_expr(bound_env, expr)
-      }),
-    )
-    use _ignored_annotations <- is.bind(
-      is.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
-        let #(type_, #(annotation, loc)) = args
-        case annotation {
-          option.None -> is.ok(Nil)
-          option.Some(type_expr) ->
-            case gleam_types.type_(tenv, type_expr) {
-              Ok(annot_type) -> infer.unify(type_, annot_type, loc)
-              Error(_) -> is.error("Unsupported annotation", loc)
-            }
-        }
-      }),
-    )
-    use vbls_applied <- is.bind(
-      is.map_list(vbls, fn(v) { is.apply_with(types.type_apply, v) }),
-    )
-    use _ignored <- is.bind(
-      is.each_list(list.zip(vbls_applied, list.zip(types_, locs)), fn(args) {
-        let #(vbl, #(type_, loc)) = args
-        infer.unify(vbl, type_, loc)
-      }),
-    )
-    use types_applied <- is.bind(
-      is.map_list(types_, fn(t) { is.apply_with(types.type_apply, t) }),
-    )
-    let new_env =
-      list.fold(
-        list.zip(names, list.zip(types_applied, params_list)),
-        env.empty(),
-        fn(acc, args) {
-          let #(name, #(type_, params)) = args
-          acc
-          |> env.with_type(name, env.generalize(tenv, type_))
-          |> env.with_type_params(name, params)
-        },
+      use types_ <- is.bind(
+        is.map_list(defns, fn(args) {
+          let #(_, _, expr, _, _, _) = args
+          infer.infer_expr(bound_env, expr)
+        }),
       )
-    is.ok(new_env)
-  })
+      use _ignored_annotations <- is.bind(
+        is.each_list(list.zip(types_, list.zip(annotations, locs)), fn(args) {
+          let #(type_, #(annotation, loc)) = args
+          case annotation {
+            option.None -> is.ok(Nil)
+            option.Some(type_expr) ->
+              case gleam_types.type_(tenv, type_expr) {
+                Ok(annot_type) -> infer.unify(type_, annot_type, loc)
+                Error(_) -> is.error("Unsupported annotation", loc)
+              }
+          }
+        }),
+      )
+      use vbls_applied <- is.bind(
+        is.map_list(vbls, fn(v) { is.apply_with(types.type_apply, v) }),
+      )
+      use _ignored <- is.bind(
+        is.each_list(list.zip(vbls_applied, list.zip(types_, locs)), fn(args) {
+          let #(vbl, #(type_, loc)) = args
+          infer.unify(vbl, type_, loc)
+        }),
+      )
+      use types_applied <- is.bind(
+        is.map_list(types_, fn(t) { is.apply_with(types.type_apply, t) }),
+      )
+      let new_env =
+        list.fold(
+          list.zip(names, list.zip(types_applied, params_list)),
+          env.empty(),
+          fn(acc, args) {
+            let #(name, #(type_, params)) = args
+            acc
+            |> env.with_type(name, env.generalize(tenv, type_))
+            |> env.with_type_params(name, params)
+          },
+        )
+      is.ok(new_env)
+    })
+  case res {
+    Ok(env_) -> Ok(#(env_, hover))
+    Error(err) -> Error(err)
+  }
 }
 
 pub fn add_typealias(
@@ -164,6 +212,7 @@ pub fn add_typealias(
     dict.new(),
     dict.new(),
     dict.from_list([#(name, #(free, alias_type))]),
+    dict.new(),
     dict.new(),
     dict.new(),
     dict.new(),
@@ -210,6 +259,7 @@ pub fn add_deftype(
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
 
   let parsed_constrs =
@@ -277,12 +327,14 @@ pub fn add_deftype(
     params,
     dict.new(),
     dict.new(),
+    dict.new(),
   )
 }
 
 pub fn add_module(
   tenv: env.TEnv,
   module: g.Module,
+  module_key: String,
 ) -> Result(env.TEnv, type_error.TypeError) {
   let g.Module(_imports, custom_types, type_aliases, constants, functions) =
     module
@@ -314,8 +366,12 @@ pub fn add_module(
               ),
               fn(defs) {
                 result.map(
-                  add_defs_grouped(tenv_with_types, defs),
-                  fn(defs_env) { env.merge(tenv_with_types, defs_env) },
+                  add_defs_grouped_with_hover(tenv_with_types, defs),
+                  fn(result) {
+                    let #(defs_env, hover) = result
+                    env.merge(tenv_with_types, defs_env)
+                    |> env.with_hover_module(module_key, hover)
+                  },
                 )
               },
             )
@@ -358,6 +414,7 @@ fn add_imports(
           _params,
           _tn,
           _refinements,
+          _hover,
         ) = tenv
         case
           dict.has_key(types_map, qualified) || dict.has_key(aliases, qualified)
@@ -387,6 +444,7 @@ fn add_imports(
                 _params_t,
                 _type_names_t,
                 _refinements_t,
+                _hover_t,
               ) = tenv
               let acc5 = case dict.get(tcons_src, qualified) {
                 Ok(constructor) -> {
@@ -399,6 +457,7 @@ fn add_imports(
                     params_acc,
                     type_names_acc,
                     refinements_acc,
+                    hover_acc,
                   ) = acc4
                   env.TEnv(
                     values_acc,
@@ -409,6 +468,7 @@ fn add_imports(
                     params_acc,
                     type_names_acc,
                     refinements_acc,
+                    hover_acc,
                   )
                 }
                 Error(_) -> acc4
@@ -448,7 +508,7 @@ fn module_key(module_name: String) -> String {
   }
 }
 
-fn add_defs_grouped(
+fn add_defs_grouped_with_hover(
   tenv: env.TEnv,
   defs: List(
     #(
@@ -460,19 +520,35 @@ fn add_defs_grouped(
       List(option.Option(String)),
     ),
   ),
-) -> Result(env.TEnv, type_error.TypeError) {
+) -> Result(#(env.TEnv, env.HoverMap), type_error.TypeError) {
   case defs {
-    [] -> Ok(env.empty())
+    [] -> Ok(#(env.empty(), dict.new()))
     _ -> {
       let def_groups = group_mutual_defs(defs)
-      fold_defs(def_groups, env.empty(), fn(acc, group) {
-        let merged = env.merge(tenv, acc)
-        result.map(add_defs(merged, group), fn(group_env) {
-          env.merge(acc, group_env)
+      fold_defs(def_groups, #(env.empty(), dict.new()), fn(acc, group) {
+        let #(acc_env, acc_hover) = acc
+        let merged = env.merge(tenv, acc_env)
+        result.map(add_defs_with_hover(merged, group), fn(result) {
+          let #(group_env, group_hover) = result
+          #(
+            env.merge(acc_env, group_env),
+            merge_hover_map(acc_hover, group_hover),
+          )
         })
       })
     }
   }
+}
+
+fn merge_hover_map(one: env.HoverMap, two: env.HoverMap) -> env.HoverMap {
+  dict.to_list(two)
+  |> list.fold(one, fn(acc, entry) {
+    let #(span, types_) = entry
+    case dict.get(acc, span) {
+      Ok(existing) -> dict.insert(acc, span, list.append(existing, types_))
+      Error(_) -> dict.insert(acc, span, types_)
+    }
+  })
 }
 
 fn add_typealias_def(
@@ -1450,6 +1526,7 @@ pub fn builtin_env() -> env.TEnv {
       #("Map", #(2, set.new())),
       #("Set", #(1, set.new())),
     ]),
+    dict.new(),
     dict.new(),
     dict.new(),
     dict.new(),

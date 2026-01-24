@@ -18,6 +18,15 @@ export function read_file(path) {
     }
 }
 
+export function write_file(path, data) {
+    try {
+        fs.writeFileSync(path, data.rawBuffer);
+        return new Ok(undefined);
+    } catch (error) {
+        return new Error(error);
+    }
+}
+
 function arrayToList(array) {
     let list = List$Empty();
     let i = array.length;

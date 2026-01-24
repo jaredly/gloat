@@ -54,7 +54,7 @@ fn infer_module(
     let filtered = gloat_glance.filter_module_for_target(parsed, "erlang")
     wrap_type(
       result.try(
-        gloat.add_module_with_target(env_with_deps, filtered, "erlang"),
+        gloat.add_module_with_target(env_with_deps, filtered, "erlang", "test"),
         fn(env2) {
           let names = public_export_names(filtered)
           result.map(
@@ -88,7 +88,7 @@ fn add_deps(
       let assert Ok(parsed) = g.module(src)
       let filtered = gloat_glance.filter_module_for_target(parsed, "erlang")
       result.try(
-        gloat.add_module_with_target(env_acc, filtered, "erlang"),
+        gloat.add_module_with_target(env_acc, filtered, "erlang", "test"),
         fn(dep_env) {
           let qualified = qualify_dep_env(dep_env, filtered, module_name)
           Ok(env.merge(env_acc, qualified))
@@ -119,6 +119,7 @@ fn qualify_dep_env(
     _params,
     _names,
     _refinements,
+    _hover,
   ) = dep_env
 
   let values_dict =
@@ -192,6 +193,7 @@ fn qualify_dep_env(
     alias_dict,
     dict.new(),
     params_dict,
+    dict.new(),
     dict.new(),
     dict.new(),
   )

@@ -2,6 +2,7 @@ import glance as g
 import gleam/option
 import gloat/builtins
 import gloat/env
+import gloat/env_json
 import gloat/glance as gloat_glance
 import gloat/infer
 import gloat/infer_state as is
@@ -38,7 +39,7 @@ pub fn add_module(
   tenv: env.TEnv,
   module: g.Module,
 ) -> Result(env.TEnv, type_error.TypeError) {
-  builtins.add_module(tenv, module)
+  builtins.add_module(tenv, module, "")
 }
 
 pub fn resolve(tenv: env.TEnv, name: String) -> option.Option(Scheme) {
@@ -52,10 +53,12 @@ pub fn add_module_with_target(
   tenv: env.TEnv,
   module: g.Module,
   target: String,
+  module_key: String,
 ) -> Result(env.TEnv, type_error.TypeError) {
   builtins.add_module(
     tenv,
     gloat_glance.filter_module_for_target(module, target),
+    module_key,
   )
 }
 
@@ -80,4 +83,12 @@ pub fn scheme_to_string_debug(scheme_: scheme.Scheme) -> String {
 
 pub fn scheme_to_string(scheme_: scheme.Scheme) -> String {
   scheme.scheme_to_string_gleam(scheme_)
+}
+
+pub fn tenv_to_json(tenv: env.TEnv) -> String {
+  env_json.encode(tenv)
+}
+
+pub fn tenv_from_json(input: String) -> Result(env.TEnv, String) {
+  env_json.decode(input)
 }

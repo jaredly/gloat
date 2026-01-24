@@ -20,6 +20,7 @@ pub fn type_(tenv: env.TEnv, type_expr: g.Type) -> Result(types.Type, Error) {
     _params,
     _type_names,
     _refinements,
+    _hover,
   ) = tenv
   case type_expr {
     g.NamedType(span, name, module, parameters) -> {
