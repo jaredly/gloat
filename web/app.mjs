@@ -4,6 +4,7 @@ import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
 import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
 import { basicSetup, EditorView } from "https://esm.sh/codemirror";
 import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
+import localforage from "https://esm.sh/localforage";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import { Error as GleamError, toList } from "../build/dev/javascript/gleam_stdlib/gleam.mjs";
 import * as gleamDict from "../build/dev/javascript/gleam_stdlib/gleam/dict.mjs";
@@ -23,6 +24,14 @@ let tenv = baseTenv;
 let packageSources = [];
 const packageVersionCache = new Map();
 const packageRequirementsCache = new Map();
+const releaseCache = localforage.createInstance({
+    name: "typechecker",
+    storeName: "hex_release_cache",
+});
+const tarballCache = localforage.createInstance({
+    name: "typechecker",
+    storeName: "hex_tarball_cache",
+});
 
 const MODULE_KEY = "repl";
 const encoder = new TextEncoder();
@@ -417,13 +426,20 @@ function parseVersion(raw) {
 }
 
 const mainTar = async (name, resolved) => {
+    const cacheKey = `${name}@${resolved}`;
+    const cached = await tarballCache.getItem(cacheKey);
+    if (cached) {
+        const buffer = cached instanceof Uint8Array ? cached : new Uint8Array(cached);
+        return extractTarGz(buffer);
+    }
     const url = `https://cdn.jsdelivr.net/hex/tarballs/${name}-${resolved}.tar`;
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to fetch ${name}@${resolved}`);
     }
-    const buffer = new Uint8Array(await response.arrayBuffer());
-    return extractTarGz(buffer);
+    const arrayBuffer = await response.arrayBuffer();
+    await tarballCache.setItem(cacheKey, arrayBuffer);
+    return extractTarGz(new Uint8Array(arrayBuffer));
 };
 
 const extractTarGz = (buffer) => {
@@ -496,12 +512,17 @@ async function fetchPackageRequirements(name, version) {
     if (packageRequirementsCache.has(cacheKey)) {
         return packageRequirementsCache.get(cacheKey);
     }
-    const response = await fetch(`https://hex.pm/api/packages/${name}/releases/${version}`);
-    if (!response.ok) {
-        throw new Error(`Failed to resolve ${name}@${version} requirements`);
+    const cached = await releaseCache.getItem(cacheKey);
+    let data = cached;
+    if (!data) {
+        const response = await fetch(`https://hex.pm/api/packages/${name}/releases/${version}`);
+        if (!response.ok) {
+            throw new Error(`Failed to resolve ${name}@${version} requirements`);
+        }
+        data = await response.json();
+        await releaseCache.setItem(cacheKey, data);
     }
-    const data = await response.json();
-    const requirements = data.requirements || {};
+    const requirements = data?.requirements || {};
     packageRequirementsCache.set(cacheKey, requirements);
     return requirements;
 }
