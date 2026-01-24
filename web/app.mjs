@@ -268,7 +268,7 @@ async function buildOfflineProvider(specs, rootPackage, rootVersion, compare) {
     let updated = pubgrub.offline_add_dependencies(provider, rootPackage, rootVersion, toList(rootDeps));
 
     const rootPins = new Map(specs.filter((spec) => spec.pinned && spec.version).map((spec) => [spec.name, spec.version]));
-    const graph = await buildDependencyGraph(specs, rootPins);
+    const graph = await buildDependencyGraph(specs, rootPins, compare);
     for (const [name, versions] of graph.versionsByPackage.entries()) {
         for (const version of versions) {
             const deps = graph.depsByPackageVersion.get(`${name}@${version}`) || [];
@@ -279,11 +279,16 @@ async function buildOfflineProvider(specs, rootPackage, rootVersion, compare) {
     return pubgrub.offline_provider(updated, compare);
 }
 
-async function buildDependencyGraph(specs, rootPins) {
+async function buildDependencyGraph(specs, rootPins, compare) {
     const queue = specs.map((spec) => spec.name);
     const seen = new Set();
+    const constraints = new Map();
     const versionsByPackage = new Map();
     const depsByPackageVersion = new Map();
+
+    for (const spec of specs) {
+        constraints.set(spec.name, parseRequirement(spec.requirement, compare));
+    }
 
     while (queue.length) {
         const name = queue.shift();
@@ -291,7 +296,9 @@ async function buildDependencyGraph(specs, rootPins) {
             continue;
         }
         seen.add(name);
-        const versions = rootPins?.has(name) ? [rootPins.get(name)] : await fetchPackageVersions(name);
+        const available = rootPins?.has(name) ? [rootPins.get(name)] : await fetchPackageVersions(name);
+        const constraint = constraints.get(name);
+        const versions = constraint ? available.filter((version) => pubgrubRanges.contains(constraint, parseVersion(version).value)) : available;
         versionsByPackage.set(name, versions);
         const requirementEntries = await Promise.all(
             versions.map(async (version) => {
@@ -301,7 +308,10 @@ async function buildDependencyGraph(specs, rootPins) {
         );
         for (const [version, deps] of requirementEntries) {
             depsByPackageVersion.set(`${name}@${version}`, deps);
-            for (const [depName] of deps) {
+            for (const [depName, depRange] of deps) {
+                const prev = constraints.get(depName);
+                const next = prev ? pubgrubRanges.intersection(prev, depRange) : depRange;
+                constraints.set(depName, next);
                 if (!seen.has(depName)) {
                     queue.push(depName);
                 }
