@@ -5,9 +5,14 @@ import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dar
 import { basicSetup, EditorView } from "https://esm.sh/codemirror";
 import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
+import { Error as GleamError, toList } from "../build/dev/javascript/gleam_stdlib/gleam.mjs";
+import * as gleamDict from "../build/dev/javascript/gleam_stdlib/gleam/dict.mjs";
 import * as gloat from "../build/dev/javascript/gloat/gloat.mjs";
 import * as gloatWeb from "../build/dev/javascript/gloat/gloat_web.mjs";
-import { parseErlangConfig } from "./erlang_source_parser.mjs";
+import * as pubgrub from "../build/dev/javascript/pubgrub/pubgrub.mjs";
+import * as pubgrubReport from "../build/dev/javascript/pubgrub/pubgrub/report.mjs";
+import * as pubgrubVersion from "../build/dev/javascript/pubgrub/pubgrub/version.mjs";
+import * as pubgrubRanges from "../build/dev/javascript/pubgrub/version_ranges.mjs";
 // import stdlib from "../stdlib.js";
 // import { Erlang } from "./erlang.mjs";
 // import { Buffer } from "https://esm.sh/buffer";
@@ -16,6 +21,8 @@ const baseTenv = gloat.builtin_env();
 // const baseTenv = gloat.tenv_from_json(JSON.stringify(stdlib))[0];
 let tenv = baseTenv;
 let packageSources = [];
+const packageVersionCache = new Map();
+const packageRequirementsCache = new Map();
 
 const MODULE_KEY = "repl";
 const encoder = new TextEncoder();
@@ -160,15 +167,13 @@ async function loadPackages() {
         setPackagesStatus("No packages specified.");
         return;
     }
-    setPackagesStatus("Downloading packages...");
     try {
+        setPackagesStatus("Resolving dependencies...");
+        const resolved = await resolvePackageVersions(specs);
+        setPackagesStatus("Downloading packages...");
         const entries = [];
-        for (const spec of specs) {
-            const { sources, requirements } = await fetchPackageSources(spec.name, spec.version);
-            // requirements is a map that looks like
-            // {[package_name: string]: {app: string, optional: boolean, requirement: string}}
-            // and requirement can look like  ">= 0.43.0 and < 1.0.0"
-            // or it could be a single version
+        for (const spec of resolved) {
+            const { sources } = await fetchPackageSources(spec.name, spec.version);
             entries.push(...sources);
         }
         packageSources = entries;
@@ -205,6 +210,198 @@ function parsePackageSpecs(input) {
         });
 }
 
+async function resolvePackageVersions(specs) {
+    const rootPackage = "__root__";
+    const rootVersion = [0, 0, 0];
+    const compare = pubgrubVersion.compare;
+    const normalized = await normalizePackageSpecs(specs);
+    const provider = await buildOfflineProvider(normalized, rootPackage, rootVersion, compare);
+    const resolved = pubgrub.resolve(provider, rootPackage, rootVersion);
+    if (resolved instanceof GleamError) {
+        const err = resolved[0];
+        if (err instanceof pubgrub.NoSolution) {
+            const tree = pubgrubReport.collapse_no_versions(err[0]);
+            const formatter = pubgrubReport.default_report_formatter((pkg) => pkg, pubgrubVersion.to_string);
+            const message = pubgrubReport.report(tree, formatter);
+            throw new Error(`No solution: ${message}`);
+        }
+        throw new Error(`Dependency resolution failed: ${err.constructor?.name ?? err}`);
+    }
+    const solution = resolved[0];
+    const entries = gleamDict.to_list(solution).toArray();
+    return entries
+        .map(([name, version]) => ({
+            name,
+            version: pubgrubVersion.to_string(version),
+        }))
+        .filter((entry) => entry.name !== rootPackage);
+}
+
+async function normalizePackageSpecs(specs) {
+    const normalized = [];
+    for (const spec of specs) {
+        if (!spec.version) {
+            const latest = await fetchLatestVersion(spec.name);
+            normalized.push({
+                name: spec.name,
+                version: latest,
+                requirement: latest,
+                pinned: true,
+            });
+            continue;
+        }
+        const trimmed = spec.version.trim();
+        const isExact = /^\d+(\.\d+){0,2}$/.test(trimmed);
+        normalized.push({
+            name: spec.name,
+            version: trimmed,
+            requirement: trimmed,
+            pinned: isExact,
+        });
+    }
+    return normalized;
+}
+
+async function buildOfflineProvider(specs, rootPackage, rootVersion, compare) {
+    const provider = pubgrub.offline_new();
+    const rootDeps = specs.map((spec) => [spec.name, parseRequirement(spec.requirement, compare)]);
+    let updated = pubgrub.offline_add_dependencies(provider, rootPackage, rootVersion, toList(rootDeps));
+
+    const rootPins = new Map(specs.filter((spec) => spec.pinned && spec.version).map((spec) => [spec.name, spec.version]));
+    const graph = await buildDependencyGraph(specs, rootPins);
+    for (const [name, versions] of graph.versionsByPackage.entries()) {
+        for (const version of versions) {
+            const deps = graph.depsByPackageVersion.get(`${name}@${version}`) || [];
+            updated = pubgrub.offline_add_dependencies(updated, name, parseVersion(version).value, toList(deps));
+        }
+    }
+
+    return pubgrub.offline_provider(updated, compare);
+}
+
+async function buildDependencyGraph(specs, rootPins) {
+    const queue = specs.map((spec) => spec.name);
+    const seen = new Set();
+    const versionsByPackage = new Map();
+    const depsByPackageVersion = new Map();
+
+    while (queue.length) {
+        const name = queue.shift();
+        if (!name || seen.has(name)) {
+            continue;
+        }
+        seen.add(name);
+        const versions = rootPins?.has(name) ? [rootPins.get(name)] : await fetchPackageVersions(name);
+        versionsByPackage.set(name, versions);
+        for (const version of versions) {
+            const requirements = await fetchPackageRequirements(name, version);
+            const deps = requirementsToDeps(requirements);
+            depsByPackageVersion.set(`${name}@${version}`, deps);
+            for (const [depName] of deps) {
+                if (!seen.has(depName)) {
+                    queue.push(depName);
+                }
+            }
+        }
+    }
+
+    return { versionsByPackage, depsByPackageVersion };
+}
+
+function parseRequirement(requirement, compare) {
+    if (!requirement) {
+        return pubgrubRanges.full(compare);
+    }
+    const orParts = requirement
+        .split(/\s+or\s+/i)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => parseRequirementAnd(part, compare));
+    if (!orParts.length) {
+        return pubgrubRanges.full(compare);
+    }
+    return orParts.reduce((acc, next) => (acc ? pubgrubRanges.union(acc, next) : next), null);
+}
+
+function parseRequirementAnd(requirement, compare) {
+    const parts = requirement
+        .split(/\s+and\s+/i)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    let range = pubgrubRanges.full(compare);
+    for (const part of parts) {
+        range = pubgrubRanges.intersection(range, parseComparator(part, compare));
+    }
+    return range;
+}
+
+function parseComparator(token, compare) {
+    if (!token || token === "*" || token.toLowerCase() === "any") {
+        return pubgrubRanges.full(compare);
+    }
+    if (token.startsWith("~>")) {
+        const parsed = parseVersion(token.slice(2).trim());
+        if (parsed.segments === 0) {
+            return pubgrubRanges.full(compare);
+        }
+        const lower = parsed.value;
+        const upper = compatibleUpperBound(parsed.value, parsed.segments);
+        return pubgrubRanges.between(compare, lower, upper);
+    }
+    if (token.startsWith(">=")) {
+        const parsed = parseVersion(token.slice(2).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.higher_than(compare, parsed.value);
+    }
+    if (token.startsWith(">")) {
+        const parsed = parseVersion(token.slice(1).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.strictly_higher_than(compare, parsed.value);
+    }
+    if (token.startsWith("<=")) {
+        const parsed = parseVersion(token.slice(2).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.lower_than(compare, parsed.value);
+    }
+    if (token.startsWith("<")) {
+        const parsed = parseVersion(token.slice(1).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.strictly_lower_than(compare, parsed.value);
+    }
+    if (token.startsWith("==")) {
+        const parsed = parseVersion(token.slice(2).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.singleton(compare, parsed.value);
+    }
+    if (token.startsWith("=")) {
+        const parsed = parseVersion(token.slice(1).trim());
+        return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.singleton(compare, parsed.value);
+    }
+    const parsed = parseVersion(token);
+    return parsed.segments === 0 ? pubgrubRanges.full(compare) : pubgrubRanges.singleton(compare, parsed.value);
+}
+
+function compatibleUpperBound(version, segments) {
+    const [major, minor, patch] = version;
+    if (segments === 1) {
+        return [major + 1, 0, 0];
+    }
+    if (segments === 2) {
+        if (major === 0) {
+            return [major, minor + 1, 0];
+        }
+        return [major + 1, 0, 0];
+    }
+    return [major, minor + 1, 0];
+}
+
+function parseVersion(raw) {
+    const match = raw.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    if (!match) {
+        return { value: [0, 0, 0], segments: 0 };
+    }
+    const segments = match.slice(1).filter((part) => part !== undefined).length;
+    const major = Number(match[1] || 0);
+    const minor = Number(match[2] || 0);
+    const patch = Number(match[3] || 0);
+    return { value: [major, minor, patch], segments };
+}
+
 const mainTar = async (name, resolved) => {
     const url = `https://cdn.jsdelivr.net/hex/tarballs/${name}-${resolved}.tar`;
     const response = await fetch(url);
@@ -228,12 +425,6 @@ async function fetchPackageSources(name, version) {
     const mainEntries = await mainTar(name, resolved);
     const contents = mainEntries.find((e) => e.name === "contents.tar.gz");
     if (!contents) throw new Error(`no contents.tar.gz`);
-    const config = mainEntries.find((e) => e.name === "metadata.config");
-    if (!config) throw new Error(`no contents.tar.gz`);
-    // const gotit = await new Promise((res) => Erlang.binary_to_term(new Buffer(config.data), res));
-    const dec = new TextDecoder();
-    const configText = dec.decode(config.data);
-    const parsedConfig = parseErlangConfig(configText);
     const contentsEntries = extractTarGz(contents.data);
 
     const sources = contentsEntries
@@ -249,7 +440,7 @@ async function fetchPackageSources(name, version) {
             };
         })
         .filter(Boolean);
-    return { sources, requirements: parsedConfig.requirements };
+    return { sources };
 }
 
 async function fetchLatestVersion(name) {
@@ -266,6 +457,81 @@ async function fetchLatestVersion(name) {
             throw new Error(`No release info for ${name}`);
         })()
     );
+}
+
+async function fetchPackageVersions(name) {
+    if (packageVersionCache.has(name)) {
+        return packageVersionCache.get(name);
+    }
+    const response = await fetch(`https://hex.pm/api/packages/${name}`);
+    if (!response.ok) {
+        throw new Error(`Failed to resolve ${name} versions`);
+    }
+    const data = await response.json();
+    const releases = data.releases || [];
+    const versions = releases.map((release) => release.version).filter((version) => parseVersion(version).segments > 0);
+    if (!versions.length && data.latest_version) {
+        versions.push(data.latest_version);
+    }
+    packageVersionCache.set(name, versions);
+    return versions;
+}
+
+async function fetchPackageRequirements(name, version) {
+    const cacheKey = `${name}@${version}`;
+    if (packageRequirementsCache.has(cacheKey)) {
+        return packageRequirementsCache.get(cacheKey);
+    }
+    const response = await fetch(`https://hex.pm/api/packages/${name}/releases/${version}`);
+    if (!response.ok) {
+        throw new Error(`Failed to resolve ${name}@${version} requirements`);
+    }
+    const data = await response.json();
+    const requirements = data.requirements || {};
+    packageRequirementsCache.set(cacheKey, requirements);
+    return requirements;
+}
+
+function requirementsToDeps(requirements) {
+    if (!requirements || typeof requirements !== "object") {
+        return [];
+    }
+    if (Array.isArray(requirements)) {
+        return requirements
+            .map((entry) => {
+                if (!entry || entry.length < 2) {
+                    return null;
+                }
+                const [name, info] = entry;
+                return normalizeRequirementEntry(name, info);
+            })
+            .filter(Boolean);
+    }
+    return Object.entries(requirements)
+        .map(([name, info]) => normalizeRequirementEntry(name, info))
+        .filter(Boolean);
+}
+
+function normalizeRequirementEntry(name, info) {
+    if (!name) {
+        return null;
+    }
+    if (Array.isArray(info)) {
+        const optional = info.some((value) => value === true);
+        if (optional) {
+            return null;
+        }
+        const requirement = info.find((value) => typeof value === "string" && /\d/.test(value)) || "";
+        return [name, parseRequirement(requirement, pubgrubVersion.compare)];
+    }
+    if (info && typeof info === "object") {
+        if (info.optional) {
+            return null;
+        }
+        const requirement = info.requirement || info.version || info.req || "";
+        return [name, parseRequirement(requirement, pubgrubVersion.compare)];
+    }
+    return [name, parseRequirement(String(info || ""), pubgrubVersion.compare)];
 }
 
 function isGzip(data) {
