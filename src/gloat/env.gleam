@@ -2,6 +2,7 @@ import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/set
+import gleam/string
 import gloat/scheme
 import gloat/types
 
@@ -288,6 +289,32 @@ pub fn resolve_module(env: TEnv, alias: String) -> Result(String, Nil) {
     _hover,
   ) = env
   dict.get(modules, alias)
+}
+
+fn has_prefixed(items: List(#(String, a)), prefix: String) -> Bool {
+  list.any(items, fn(entry) {
+    let #(name, _value) = entry
+    string.starts_with(name, prefix)
+  })
+}
+
+pub fn module_exists(env: TEnv, module_key: String) -> Bool {
+  let prefix = module_key <> "/"
+  let TEnv(
+    values,
+    tcons,
+    types_,
+    aliases,
+    _modules,
+    _params,
+    _type_names,
+    _refinements,
+    _hover,
+  ) = env
+  has_prefixed(dict.to_list(values), prefix)
+  || has_prefixed(dict.to_list(tcons), prefix)
+  || has_prefixed(dict.to_list(types_), prefix)
+  || has_prefixed(dict.to_list(aliases), prefix)
 }
 
 pub fn type_free(env: TEnv) -> set.Set(String) {

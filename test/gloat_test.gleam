@@ -212,6 +212,11 @@ pub fn import_unknown_value_error_test() {
   assert is_error(process(code, "top"))
 }
 
+pub fn import_unknown_module_error_test() {
+  let code = "import does/not/exist\nconst top = 1"
+  assert is_error(process(code, "top"))
+}
+
 pub fn external_function_annotation_test() {
   let code =
     "@external(erlang, \"x\", \"y\")\npub fn ext(a: Int) -> String\nconst top = ext(1)"

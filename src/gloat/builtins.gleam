@@ -397,92 +397,109 @@ fn add_imports(
       option.Some(g.Named(name)) -> env.with_module(acc, name, base)
       option.Some(g.Discarded(_)) -> acc
     }
+    let module_known = case base == "gleam" {
+      True -> True
+      False -> env.module_exists(tenv, base)
+    }
     result.try(
-      fold_defs(type_imports, acc_with_module, fn(acc2, type_import) {
-        let g.UnqualifiedImport(name, alias) = type_import
-        let target = case alias {
-          option.None -> name
-          option.Some(alias_name) -> alias_name
-        }
-        let qualified = base <> "/" <> name
-        let env.TEnv(
-          _values,
-          _tcons,
-          types_map,
-          aliases,
-          _modules,
-          _params,
-          _tn,
-          _refinements,
-          _hover,
-        ) = tenv
-        case
-          dict.has_key(types_map, qualified) || dict.has_key(aliases, qualified)
-        {
-          True -> Ok(env.with_type_name(acc2, target, qualified))
-          False ->
-            Error(type_error.new("Unknown import type " <> qualified, span))
-        }
-      }),
-      fn(acc2) {
-        fold_defs(values, acc2, fn(acc3, value) {
-          let g.UnqualifiedImport(name, alias) = value
-          let target = case alias {
-            option.None -> name
-            option.Some(alias_name) -> alias_name
-          }
-          let qualified = base <> "/" <> name
-          case env.resolve(tenv, qualified) {
-            Ok(scheme_) -> {
-              let acc4 = env.with_type(acc3, target, scheme_)
-              let env.TEnv(
-                _values_t,
-                tcons_src,
-                _types_t,
-                _aliases_t,
-                _modules_t,
-                _params_t,
-                _type_names_t,
-                _refinements_t,
-                _hover_t,
-              ) = tenv
-              let acc5 = case dict.get(tcons_src, qualified) {
-                Ok(constructor) -> {
-                  let env.TEnv(
-                    values_acc,
-                    tcons_acc,
-                    types_acc,
-                    aliases_acc,
-                    modules_acc,
-                    params_acc,
-                    type_names_acc,
-                    refinements_acc,
-                    hover_acc,
-                  ) = acc4
-                  env.TEnv(
-                    values_acc,
-                    dict.insert(tcons_acc, target, constructor),
-                    types_acc,
-                    aliases_acc,
-                    modules_acc,
-                    params_acc,
-                    type_names_acc,
-                    refinements_acc,
-                    hover_acc,
-                  )
-                }
-                Error(_) -> acc4
-              }
-              let acc6 = case env.resolve_params(tenv, qualified) {
-                Ok(params) -> env.with_type_params(acc5, target, params)
-                Error(_) -> acc5
-              }
-              Ok(acc6)
+      case module_known {
+        True -> Ok(acc_with_module)
+        False ->
+          Error(type_error.new("Unknown import module " <> module_name, span))
+      },
+      fn(acc_with_module) {
+        result.try(
+          fold_defs(type_imports, acc_with_module, fn(acc2, type_import) {
+            let g.UnqualifiedImport(name, alias) = type_import
+            let target = case alias {
+              option.None -> name
+              option.Some(alias_name) -> alias_name
             }
-            Error(_) ->
-              Error(type_error.new("Unknown import value " <> qualified, span))
-          }
-        })
+            let qualified = base <> "/" <> name
+            let env.TEnv(
+              _values,
+              _tcons,
+              types_map,
+              aliases,
+              _modules,
+              _params,
+              _tn,
+              _refinements,
+              _hover,
+            ) = tenv
+            case
+              dict.has_key(types_map, qualified)
+              || dict.has_key(aliases, qualified)
+            {
+              True -> Ok(env.with_type_name(acc2, target, qualified))
+              False ->
+                Error(type_error.new("Unknown import type " <> qualified, span))
+            }
+          }),
+          fn(acc2) {
+            fold_defs(values, acc2, fn(acc3, value) {
+              let g.UnqualifiedImport(name, alias) = value
+              let target = case alias {
+                option.None -> name
+                option.Some(alias_name) -> alias_name
+              }
+              let qualified = base <> "/" <> name
+              case env.resolve(tenv, qualified) {
+                Ok(scheme_) -> {
+                  let acc4 = env.with_type(acc3, target, scheme_)
+                  let env.TEnv(
+                    _values_t,
+                    tcons_src,
+                    _types_t,
+                    _aliases_t,
+                    _modules_t,
+                    _params_t,
+                    _type_names_t,
+                    _refinements_t,
+                    _hover_t,
+                  ) = tenv
+                  let acc5 = case dict.get(tcons_src, qualified) {
+                    Ok(constructor) -> {
+                      let env.TEnv(
+                        values_acc,
+                        tcons_acc,
+                        types_acc,
+                        aliases_acc,
+                        modules_acc,
+                        params_acc,
+                        type_names_acc,
+                        refinements_acc,
+                        hover_acc,
+                      ) = acc4
+                      env.TEnv(
+                        values_acc,
+                        dict.insert(tcons_acc, target, constructor),
+                        types_acc,
+                        aliases_acc,
+                        modules_acc,
+                        params_acc,
+                        type_names_acc,
+                        refinements_acc,
+                        hover_acc,
+                      )
+                    }
+                    Error(_) -> acc4
+                  }
+                  let acc6 = case env.resolve_params(tenv, qualified) {
+                    Ok(params) -> env.with_type_params(acc5, target, params)
+                    Error(_) -> acc5
+                  }
+                  Ok(acc6)
+                }
+                Error(_) ->
+                  Error(type_error.new(
+                    "Unknown import value " <> qualified,
+                    span,
+                  ))
+              }
+            })
+          },
+        )
       },
     )
   })
