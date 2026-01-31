@@ -67,8 +67,11 @@ let lastSource = sample;
 let hoverTimer = null;
 let typecheckTimer = null;
 let lastHoverRange = null;
+let lastErrorRange = null;
+let lastErrorMessage = "";
 
 const setHoverEffect = StateEffect.define();
+const setErrorEffect = StateEffect.define();
 const hoverField = StateField.define({
     create() {
         return Decoration.none;
@@ -88,12 +91,32 @@ const hoverField = StateField.define({
     },
     provide: (field) => EditorView.decorations.from(field),
 });
+const errorField = StateField.define({
+    create() {
+        return Decoration.none;
+    },
+    update(value, tr) {
+        let next = value.map(tr.changes);
+        for (const effect of tr.effects) {
+            if (effect.is(setErrorEffect)) {
+                if (!effect.value) {
+                    return Decoration.none;
+                }
+                const { from, to } = effect.value;
+                return Decoration.set([Decoration.mark({ class: "cm-type-error" }).range(from, to)]);
+            }
+        }
+        return next;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+});
 
 const view = new EditorView({
     doc: sample,
     extensions: [
         basicSetup,
         hoverField,
+        errorField,
         EditorView.updateListener.of((update) => {
             if (update.docChanged) scheduleTypecheck();
             // if (update.selectionSet) handleSelectionHover(update.view);
@@ -146,12 +169,28 @@ function runTypecheck() {
         if (name === "ParseError") {
             setStatus("Parse error");
             detailsEl.textContent = err[0] || "Parse error.";
+            setErrorRange(view, null);
+            lastErrorMessage = "";
         } else if (name === "TypeError") {
             setStatus("Type error");
             detailsEl.textContent = formatTypeError(err, source);
+            lastErrorMessage = err?.message || err?.[0] || "Type error.";
+
+            const start = err[1];
+            const end = err[2];
+            if (typeof start === "number" && typeof end === "number") {
+                setErrorRange(view, { start, end });
+            } else {
+                setErrorRange(view, null);
+            }
         } else {
             setStatus("Error");
             detailsEl.textContent = "Analysis failed.";
+            const start = err.start;
+            const end = err.end;
+            console.log(err);
+            setErrorRange(view, Number.isFinite(start) && Number.isFinite(end) ? { start, end } : null);
+            lastErrorMessage = err.message;
         }
         return;
     }
@@ -163,6 +202,8 @@ function runTypecheck() {
     hoverIndex = buildHoverIndex(lastGoodEnv);
     setStatus("Typecheck OK");
     detailsEl.textContent = `Hover over expressions to see types. (${hoverIndex.length} spans)`;
+    setErrorRange(view, null);
+    lastErrorMessage = "";
 }
 
 function buildHoverIndex(entries) {
@@ -668,7 +709,7 @@ function setPackagesStatus(message) {
 }
 
 function handleHover(event, view) {
-    if (!hoverIndex.length) {
+    if (!hoverIndex.length && !lastErrorRange) {
         clearTimeout(hoverTimer);
         return;
     }
@@ -685,6 +726,20 @@ function handleHover(event, view) {
             return;
         }
         // const pos = selection.head;
+
+        if (lastErrorRange && pos >= lastErrorRange.from && pos <= lastErrorRange.to) {
+            const coords = view.coordsAtPos(pos);
+            if (!coords) {
+                hideHover();
+                return;
+            }
+            highlightRange(view, null);
+            hoverEl.textContent = lastErrorMessage || "Type error.";
+            hoverEl.style.left = `${coords.left + 12}px`;
+            hoverEl.style.top = `${coords.bottom + 12}px`;
+            hoverEl.classList.remove("hidden");
+            return;
+        }
 
         const offset = byteOffsetAtPos(view.state.doc.toString(), pos);
         const matches = hoverIndex
@@ -779,6 +834,27 @@ function highlightRange(view, span) {
     }
     lastHoverRange = { from, to };
     view.dispatch({ effects: setHoverEffect.of({ from, to }) });
+}
+
+function setErrorRange(view, span) {
+    if (!span) {
+        if (lastErrorRange !== null) {
+            lastErrorRange = null;
+            view.dispatch({ effects: setErrorEffect.of(null) });
+        }
+        return;
+    }
+    const source = view.state.doc.toString();
+    const from = posFromByteOffset(source, span.start);
+    let to = posFromByteOffset(source, span.end);
+    if (to <= from) {
+        to = Math.min(from + 1, view.state.doc.length);
+    }
+    if (lastErrorRange && lastErrorRange.from === from && lastErrorRange.to === to) {
+        return;
+    }
+    lastErrorRange = { from, to };
+    view.dispatch({ effects: setErrorEffect.of({ from, to }) });
 }
 
 function setStatus(text) {

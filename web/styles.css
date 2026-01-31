@@ -144,6 +144,12 @@ button {
     border-radius: 6px;
 }
 
+.cm-type-error {
+    text-decoration: underline wavy #ff5c5c;
+    text-decoration-thickness: 1.5px;
+    text-decoration-skip-ink: none;
+}
+
 .hover {
     position: absolute;
     z-index: 20;
