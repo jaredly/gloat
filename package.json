@@ -1,0 +1,18 @@
+{
+    "name": "gloat-typechecker-web",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "bun run web/dev-server.mjs",
+        "build": "bun run web/build.mjs"
+    },
+    "dependencies": {
+        "@codemirror/state": "*",
+        "@codemirror/view": "*",
+        "@exercism/codemirror-lang-gleam": "*",
+        "@fsegurai/codemirror-theme-github-dark": "*",
+        "codemirror": "*",
+        "fflate": "*",
+        "localforage": "*"
+    }
+}

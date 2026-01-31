@@ -1,10 +1,10 @@
-import { StateEffect, StateField } from "https://esm.sh/@codemirror/state";
-import { Decoration } from "https://esm.sh/@codemirror/view";
-import { gleam } from "https://esm.sh/@exercism/codemirror-lang-gleam";
-import { githubDark } from "https://esm.sh/@fsegurai/codemirror-theme-github-dark";
-import { basicSetup, EditorView } from "https://esm.sh/codemirror";
-import { gunzipSync } from "https://esm.sh/fflate@0.8.2";
-import localforage from "https://esm.sh/localforage";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration } from "@codemirror/view";
+import { gleam } from "@exercism/codemirror-lang-gleam";
+import { githubDark } from "@fsegurai/codemirror-theme-github-dark";
+import { basicSetup, EditorView } from "codemirror";
+import { gunzipSync } from "fflate";
+import localforage from "localforage";
 import { Error as ResultError } from "../build/dev/javascript/gloat/gleam.mjs";
 import { Error as GleamError, toList } from "../build/dev/javascript/gleam_stdlib/gleam.mjs";
 import * as gleamDict from "../build/dev/javascript/gleam_stdlib/gleam/dict.mjs";

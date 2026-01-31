@@ -1,9 +1,11 @@
 *.beam
 *.ez
 /build
+/web/dist
 erl_crash.dump
 .clj-kondo
 glance
 example-files/gleam
 example-files/stdlib
 stdlib.js
+node_modules
